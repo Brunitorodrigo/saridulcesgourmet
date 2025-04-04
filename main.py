@@ -316,7 +316,6 @@ def modulo_produtos(db):
             descricao = st.text_area("Descrição do Produto", height=100)
             ingredientes = st.text_area("Ingredientes/Composição")
             
-            # Upload de imagem (opcional)
             imagem = st.file_uploader("Imagem do Produto", type=["jpg", "png", "jpeg"])
             
             if st.form_submit_button("Cadastrar Produto"):
@@ -395,15 +394,16 @@ def modulo_produtos(db):
                     "Nome": p["nome"],
                     "Código": p.get("codigo", "-"),
                     "Categoria": p["categoria"],
-                    "Preço": f"R$ {p['preco_venda']:.2f}",
-                    "Custo": f"R$ {p.get('custo_producao', 0):.2f}",
+                    "Preço": p["preco_venda"],
+                    "Custo": p.get("custo_producao", 0),
                     "Estoque": p["estoque"],
-                    "Status": "Ativo" if p.get("ativo", False) else "Inativo"
+                    "Status": "Ativo" if p.get("ativo", False) else "Inativo",
+                    "Ações": "Manter"
                 })
             
             df = pd.DataFrame(dados)
             
-            # Estilo condicional para estoque baixo
+            # Estilo condicional para estoque
             def estilo_linha(row):
                 estilo = []
                 if row['Estoque'] == 0:
@@ -414,23 +414,58 @@ def modulo_produtos(db):
                     estilo.append('color: green')
                 return estilo * len(row)
             
-            st.dataframe(
+            # Editor de dados com opção de exclusão
+            edited_df = st.data_editor(
                 df.style.apply(estilo_linha, axis=1),
-                use_container_width=True,
-                hide_index=True,
                 column_config={
                     "ID": st.column_config.Column(disabled=True),
                     "Preço": st.column_config.NumberColumn(format="R$ %.2f"),
-                    "Custo": st.column_config.NumberColumn(format="R$ %.2f")
-                }
+                    "Custo": st.column_config.NumberColumn(format="R$ %.2f"),
+                    "Ações": st.column_config.SelectboxColumn(
+                        "Ações",
+                        options=["Manter", "Excluir"],
+                        required=True
+                    )
+                },
+                hide_index=True,
+                use_container_width=True,
+                key="editor_produtos"
             )
             
-            # Edição de produtos
+            # Processa produtos marcados para exclusão
+            if not edited_df[edited_df['Ações'] == "Excluir"].empty:
+                st.warning("⚠️ Atenção: Esta ação não pode ser desfeita!")
+                
+                if st.button("Confirmar Exclusão", type="primary"):
+                    with st.spinner("Excluindo produtos..."):
+                        try:
+                            for idx, row in edited_df[edited_df['Ações'] == "Excluir"].iterrows():
+                                produto_id = row['ID']
+                                
+                                # Verifica se o produto está em alguma venda
+                                vendas_com_produto = db['itens_venda'].count_documents({"produto_id": produto_id})
+                                
+                                if vendas_com_produto > 0:
+                                    st.error(f"O produto {row['Nome']} está associado a {vendas_com_produto} venda(s) e não pode ser excluído!")
+                                    continue
+                                
+                                # Exclusão física do produto
+                                produtos_col.delete_one({"_id": ObjectId(produto_id)})
+                            
+                            st.success("Produtos excluídos com sucesso!")
+                            st.balloons()
+                            st.rerun()
+                        
+                        except Exception as e:
+                            st.error(f"Erro ao excluir produtos: {str(e)}")
+            
+            # Seção de Edição
             with st.expander("📝 Editar Produto", expanded=False):
                 produto_editar = st.selectbox(
                     "Selecione o produto para editar",
-                    [p["_id"] for p in produtos],
-                    format_func=lambda x: next(p["nome"] for p in produtos if p["_id"] == x)
+                    [p["_id"] for p in produtos if p["_id"] not in [ObjectId(row['ID']) for _, row in edited_df[edited_df['Ações'] == "Excluir"].iterrows()],
+                    format_func=lambda x: next(p["nome"] for p in produtos if p["_id"] == x),
+                    key="select_editar_produto"
                 )
                 
                 if produto_editar:
@@ -439,12 +474,13 @@ def modulo_produtos(db):
                         col_e1, col_e2 = st.columns(2)
                         
                         with col_e1:
-                            novo_nome = st.text_input("Nome", value=produto["nome"])
-                            novo_codigo = st.text_input("Código", value=produto.get("codigo", ""))
+                            novo_nome = st.text_input("Nome", value=produto["nome"], key=f"nome_{produto_editar}")
+                            novo_codigo = st.text_input("Código", value=produto.get("codigo", ""), key=f"codigo_{produto_editar}")
                             nova_categoria = st.selectbox(
                                 "Categoria",
                                 ["Doce", "Salgado", "Bebida", "Outros"],
-                                index=["Doce", "Salgado", "Bebida", "Outros"].index(produto["categoria"])
+                                index=["Doce", "Salgado", "Bebida", "Outros"].index(produto["categoria"]),
+                                key=f"categoria_{produto_editar}"
                             )
                             
                         with col_e2:
@@ -452,26 +488,31 @@ def modulo_produtos(db):
                                 "Preço", 
                                 min_value=0.01, 
                                 step=0.01, 
-                                value=float(produto["preco_venda"])
+                                value=float(produto["preco_venda"]),
+                                key=f"preco_{produto_editar}"
                             )
                             novo_custo = st.number_input(
                                 "Custo", 
                                 min_value=0.0, 
                                 step=0.01, 
-                                value=float(produto.get("custo_producao", 0))
+                                value=float(produto.get("custo_producao", 0))),
+                                key=f"custo_{produto_editar}"
                             )
                             novo_status = st.checkbox(
                                 "Ativo", 
-                                value=produto.get("ativo", True)
+                                value=produto.get("ativo", True),
+                                key=f"status_{produto_editar}"
                             )
                         
                         nova_descricao = st.text_area(
                             "Descrição", 
-                            value=produto.get("descricao", "")
+                            value=produto.get("descricao", ""),
+                            key=f"descricao_{produto_editar}"
                         )
                         novos_ingredientes = st.text_area(
                             "Ingredientes", 
-                            value=produto.get("ingredientes", "")
+                            value=produto.get("ingredientes", ""),
+                            key=f"ingredientes_{produto_editar}"
                         )
                         
                         if st.form_submit_button("Atualizar Produto"):
@@ -543,7 +584,7 @@ def modulo_produtos(db):
                                             "quantidade": entrada,
                                             "data": datetime.now(),
                                             "motivo": motivo_entrada if motivo_entrada else None,
-                                            "responsavel": "Sistema"  # Poderia ser substituído por usuário logado
+                                            "responsavel": "Sistema"
                                         }
                                     }
                                 }
@@ -605,7 +646,6 @@ def modulo_produtos(db):
                         )
         else:
             st.info("Nenhum produto ativo disponível para gerenciamento de estoque.")
-
 # =============================================
 # MÓDULO DE VENDAS
 # =============================================
