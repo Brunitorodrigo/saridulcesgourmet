@@ -49,82 +49,295 @@ def get_database():
 # MÓDULO DE CLIENTES
 # =============================================
 def modulo_clientes(db):
-    st.title("📋 Gestão de Clientes")
+    st.title("👥 Gestão de Clientes")
     clientes_col = db['clientes']
 
-    tab1, tab2 = st.tabs(["Cadastrar", "Listar/Editar"])
+    tab1, tab2, tab3 = st.tabs(["Cadastrar", "Listar/Editar", "Análises"])
 
     with tab1:
-        st.subheader("Novo Cliente")
-        with st.form("form_cliente"):
-            nome = st.text_input("Nome Completo*")
-            celular = st.text_input("Celular*")
-            email = st.text_input("Email")
-            endereco = st.text_area("Endereço")
-
-            if st.form_submit_button("Salvar"):
-                if nome and celular:
+        st.subheader("Cadastro de Cliente")
+        with st.form("form_cliente", clear_on_submit=True):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                nome = st.text_input("Nome Completo*", max_chars=100)
+                data_nascimento = st.date_input("Data de Nascimento", 
+                                              min_value=datetime(1900, 1, 1),
+                                              max_value=datetime.now())
+                cpf = st.text_input("CPF", 
+                                   help="Formato: 123.456.789-00",
+                                   max_chars=14)
+                
+            with col2:
+                celular = st.text_input("Celular*", 
+                                      max_chars=15,
+                                      help="Formato: (99) 99999-9999")
+                email = st.text_input("E-mail", 
+                                    type="default",
+                                    help="exemplo@dominio.com")
+                
+            endereco = st.text_area("Endereço Completo")
+            observacoes = st.text_area("Observações/Notas")
+            
+            if st.form_submit_button("Cadastrar Cliente"):
+                if not nome or not celular:
+                    st.error("Campos obrigatórios (*) não preenchidos!")
+                else:
                     novo_cliente = {
                         "nome": nome,
-                        "celular": celular,
-                        "email": email,
-                        "endereco": endereco,
+                        "data_nascimento": data_nascimento,
+                        "cpf": cpf if cpf else None,
+                        "contato": {
+                            "celular": celular,
+                            "email": email if email else None
+                        },
+                        "endereco": endereco if endereco else None,
+                        "observacoes": observacoes if observacoes else None,
                         "data_cadastro": datetime.now(),
-                        "ativo": True
+                        "ultima_atualizacao": datetime.now(),
+                        "status": "ativo",
+                        "tipo": "consumidor_final",  # ['consumidor_final', 'revendedor', 'empresa']
+                        "compras_realizadas": 0,
+                        "total_gasto": 0.0
                     }
+                    
                     try:
-                        clientes_col.insert_one(novo_cliente)
-                        st.success("Cliente cadastrado com sucesso!")
+                        # Verifica se CPF já existe
+                        if cpf:
+                            existe = clientes_col.count_documents({"cpf": cpf}, limit=1)
+                            if existe > 0:
+                                st.warning("Já existe um cliente cadastrado com este CPF")
+                                return
+                        
+                        result = clientes_col.insert_one(novo_cliente)
+                        st.success(f"Cliente cadastrado com sucesso! ID: {result.inserted_id}")
+                        st.balloons()
                     except Exception as e:
-                        st.error(f"Erro ao cadastrar cliente: {e}")
-                else:
-                    st.error("Campos obrigatórios (*) não preenchidos!")
+                        st.error(f"Erro ao cadastrar cliente: {str(e)}")
 
     with tab2:
         st.subheader("Clientes Cadastrados")
-        clientes = list(clientes_col.find({"ativo": True}))
+        
+        # Filtros avançados
+        with st.expander("🔍 Filtros", expanded=False):
+            col_f1, col_f2, col_f3 = st.columns(3)
+            with col_f1:
+                filtro_nome = st.text_input("Filtrar por nome")
+            with col_f2:
+                filtro_status = st.selectbox(
+                    "Status",
+                    ["Todos", "Ativo", "Inativo"],
+                    index=0
+                )
+            with col_f3:
+                filtro_tipo = st.selectbox(
+                    "Tipo de cliente",
+                    ["Todos", "Consumidor Final", "Revendedor", "Empresa"],
+                    index=0
+                )
+        
+        # Construção da query
+        query = {}
+        if filtro_nome:
+            query["nome"] = {"$regex": filtro_nome, "$options": "i"}
+        if filtro_status != "Todos":
+            query["status"] = "ativo" if filtro_status == "Ativo" else "inativo"
+        if filtro_tipo != "Todos":
+            tipo_map = {
+                "Consumidor Final": "consumidor_final",
+                "Revendedor": "revendedor",
+                "Empresa": "empresa"
+            }
+            query["tipo"] = tipo_map[filtro_tipo]
+        
+        # Consulta com paginação
+        clientes = list(clientes_col.find(query).sort("nome", 1).limit(100))
         
         if clientes:
-            df = pd.DataFrame(clientes)
-            # Remover colunas não necessárias para exibição
-            df = df.drop(columns=['_id', 'ativo'], errors='ignore')
-            st.dataframe(df, use_container_width=True)
-
-            # Edição de clientes
-            with st.expander("Editar Cliente"):
-                cliente_selecionado = st.selectbox(
-                    "Selecione o cliente",
-                    options=[str(cliente['_id']) for cliente in clientes],
-                    format_func=lambda x: f"{clientes_col.find_one({'_id': ObjectId(x)})['nome']} - {clientes_col.find_one({'_id': ObjectId(x)})['celular']}"
+            # Preparação dos dados para exibição
+            dados = []
+            for c in clientes:
+                dados.append({
+                    "ID": str(c["_id"]),
+                    "Nome": c["nome"],
+                    "Contato": f"{c['contato']['celular']}" + 
+                              (f"\n{c['contato']['email']}" if c['contato'].get('email') else ""),
+                    "Tipo": "Consumidor" if c["tipo"] == "consumidor_final" else c["tipo"].capitalize(),
+                    "Cadastro": c["data_cadastro"].strftime("%d/%m/%Y"),
+                    "Compras": c.get("compras_realizadas", 0),
+                    "Total Gasto": f"R$ {c.get('total_gasto', 0):.2f}",
+                    "Status": c["status"].capitalize()
+                })
+            
+            df = pd.DataFrame(dados)
+            
+            # Estilo condicional
+            def estilo_linha(row):
+                estilo = []
+                if row['Status'] == 'Inativo':
+                    estilo.append('color: gray')
+                elif row['Tipo'] == 'Revendedor':
+                    estilo.append('color: blue')
+                elif row['Tipo'] == 'Empresa':
+                    estilo.append('color: green')
+                return estilo * len(row)
+            
+            st.dataframe(
+                df.style.apply(estilo_linha, axis=1),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "ID": st.column_config.Column(disabled=True),
+                    "Total Gasto": st.column_config.NumberColumn(format="R$ %.2f")
+                }
+            )
+            
+            # Edição detalhada
+            with st.expander("✏️ Editar Cliente", expanded=False):
+                cliente_editar = st.selectbox(
+                    "Selecione o cliente para editar",
+                    [c["_id"] for c in clientes],
+                    format_func=lambda x: next(c["nome"] for c in clientes if c["_id"] == x)
                 )
-
-                if cliente_selecionado:
-                    dados_cliente = clientes_col.find_one({"_id": ObjectId(cliente_selecionado)})
-
-                    with st.form("form_editar_cliente"):
-                        novo_nome = st.text_input("Nome", value=dados_cliente.get('nome', ''))
-                        novo_celular = st.text_input("Celular", value=dados_cliente.get('celular', ''))
-                        novo_email = st.text_input("Email", value=dados_cliente.get('email', ''))
-                        novo_endereco = st.text_area("Endereço", value=dados_cliente.get('endereco', ''))
-
-                        if st.form_submit_button("Atualizar"):
-                            try:
-                                clientes_col.update_one(
-                                    {"_id": ObjectId(cliente_selecionado)},
-                                    {"$set": {
-                                        "nome": novo_nome,
+                
+                if cliente_editar:
+                    cliente = clientes_col.find_one({"_id": cliente_editar})
+                    with st.form(f"form_editar_{cliente_editar}"):
+                        col_e1, col_e2 = st.columns(2)
+                        
+                        with col_e1:
+                            novo_nome = st.text_input("Nome", value=cliente["nome"])
+                            novo_cpf = st.text_input("CPF", 
+                                                    value=cliente.get("cpf", ""),
+                                                    max_chars=14)
+                            novo_status = st.selectbox(
+                                "Status",
+                                ["ativo", "inativo"],
+                                index=0 if cliente["status"] == "ativo" else 1
+                            )
+                            
+                        with col_e2:
+                            novo_celular = st.text_input(
+                                "Celular", 
+                                value=cliente["contato"]["celular"],
+                                max_chars=15
+                            )
+                            novo_email = st.text_input(
+                                "E-mail", 
+                                value=cliente["contato"].get("email", "")
+                            )
+                            novo_tipo = st.selectbox(
+                                "Tipo de cliente",
+                                ["consumidor_final", "revendedor", "empresa"],
+                                index=["consumidor_final", "revendedor", "empresa"].index(cliente["tipo"])
+                            )
+                        
+                        novo_endereco = st.text_area(
+                            "Endereço", 
+                            value=cliente.get("endereco", "")
+                        )
+                        novas_obs = st.text_area(
+                            "Observações", 
+                            value=cliente.get("observacoes", "")
+                        )
+                        
+                        if st.form_submit_button("Atualizar Cliente"):
+                            atualizacao = {
+                                "$set": {
+                                    "nome": novo_nome,
+                                    "cpf": novo_cpf if novo_cpf else None,
+                                    "contato": {
                                         "celular": novo_celular,
-                                        "email": novo_email,
-                                        "endereco": novo_endereco
-                                    }}
+                                        "email": novo_email if novo_email else None
+                                    },
+                                    "endereco": novo_endereco if novo_endereco else None,
+                                    "observacoes": novas_obs if novas_obs else None,
+                                    "status": novo_status,
+                                    "tipo": novo_tipo,
+                                    "ultima_atualizacao": datetime.now()
+                                }
+                            }
+                            
+                            try:
+                                # Verifica se CPF já existe para outro cliente
+                                if novo_cpf and novo_cpf != cliente.get("cpf", ""):
+                                    existe = clientes_col.count_documents({
+                                        "cpf": novo_cpf,
+                                        "_id": {"$ne": cliente_editar}
+                                    }, limit=1)
+                                    if existe > 0:
+                                        st.warning("CPF já cadastrado para outro cliente")
+                                        return
+                                
+                                clientes_col.update_one(
+                                    {"_id": cliente_editar},
+                                    atualizacao
                                 )
-                                st.success("Cliente atualizado!")
+                                st.success("Cliente atualizado com sucesso!")
                                 st.rerun()
                             except Exception as e:
-                                st.error(f"Erro ao atualizar cliente: {e}")
+                                st.error(f"Erro ao atualizar cliente: {str(e)}")
         else:
-            st.info("Nenhum cliente cadastrado ainda.")
+            st.info("Nenhum cliente encontrado com os filtros selecionados.")
 
+    with tab3:
+        st.subheader("Análises de Clientes")
+        
+        col_a1, col_a2 = st.columns(2)
+        
+        with col_a1:
+            st.metric("Total de Clientes", 
+                     clientes_col.count_documents({}))
+            st.metric("Clientes Ativos", 
+                     clientes_col.count_documents({"status": "ativo"}))
+            
+            # Distribuição por tipo
+            tipos = clientes_col.aggregate([
+                {"$group": {"_id": "$tipo", "count": {"$sum": 1}}},
+                {"$project": {"tipo": "$_id", "count": 1, "_id": 0}}
+            ])
+            
+            df_tipos = pd.DataFrame(list(tipos))
+            if not df_tipos.empty:
+                df_tipos['tipo'] = df_tipos['tipo'].map({
+                    "consumidor_final": "Consumidor",
+                    "revendedor": "Revendedor",
+                    "empresa": "Empresa"
+                })
+                st.bar_chart(df_tipos.set_index('tipo'))
+        
+        with col_a2:
+            # Top clientes
+            top_clientes = list(clientes_col.find(
+                {"status": "ativo"}
+            ).sort("total_gasto", -1).limit(5))
+            
+            if top_clientes:
+                st.write("**Top Clientes por Valor Gasto**")
+                for i, cliente in enumerate(top_clientes, 1):
+                    st.write(f"{i}. {cliente['nome']} - R$ {cliente['total_gasto']:.2f}")
+            
+            # Evolução de cadastros
+            evolucao = clientes_col.aggregate([
+                {"$project": {
+                    "ano_mes": {
+                        "$dateToString": {
+                            "format": "%Y-%m",
+                            "date": "$data_cadastro"
+                        }
+                    }
+                }},
+                {"$group": {
+                    "_id": "$ano_mes",
+                    "total": {"$sum": 1}
+                }},
+                {"$sort": {"_id": 1}},
+                {"$limit": 12}
+            ])
+            
+            df_evolucao = pd.DataFrame(list(evolucao))
+            if not df_evolucao.empty:
+                st.line_chart(df_evolucao.set_index('_id'))
 # =============================================
 # MÓDULO DE PRODUTOS
 # =============================================
@@ -132,97 +345,319 @@ def modulo_produtos(db):
     st.title("📦 Gestão de Produtos")
     produtos_col = db['produtos']
 
-    tab1, tab2 = st.tabs(["Cadastrar", "Listar/Editar"])
+    tab1, tab2, tab3 = st.tabs(["Cadastrar", "Listar/Editar", "Gerenciar Estoque"])
 
     with tab1:
-        st.subheader("Novo Produto")
-        with st.form("form_produto"):
-            nome = st.text_input("Nome do Produto*")
-            descricao = st.text_area("Descrição")
-            preco = st.number_input("Preço de Venda*", min_value=0.0, step=0.01)
-            custo = st.number_input("Custo de Produção", min_value=0.0, step=0.01, value=0.0)
-            estoque = st.number_input("Estoque Inicial*", min_value=0, step=1)
+        st.subheader("Cadastro de Produto")
+        with st.form("form_produto", clear_on_submit=True):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                nome = st.text_input("Nome do Produto*", max_chars=100)
+                codigo = st.text_input("Código SKU", help="Código único de identificação")
+                categoria = st.selectbox(
+                    "Categoria*",
+                    ["Doce", "Salgado", "Bebida", "Outros"],
+                    index=0
+                )
+                
+            with col2:
+                preco_venda = st.number_input("Preço de Venda (R$)*", min_value=0.01, step=0.01, format="%.2f")
+                custo_producao = st.number_input("Custo de Produção (R$)", min_value=0.0, step=0.01, format="%.2f", value=0.0)
+                estoque_inicial = st.number_input("Estoque Inicial*", min_value=0, step=1, value=0)
 
-            if st.form_submit_button("Salvar"):
-                if nome and preco and estoque >= 0:
+            descricao = st.text_area("Descrição do Produto", height=100)
+            ingredientes = st.text_area("Ingredientes/Composição")
+            
+            # Upload de imagem (opcional)
+            imagem = st.file_uploader("Imagem do Produto", type=["jpg", "png", "jpeg"])
+            
+            if st.form_submit_button("Cadastrar Produto"):
+                if not nome or not categoria:
+                    st.error("Campos obrigatórios (*) não preenchidos!")
+                else:
                     novo_produto = {
                         "nome": nome,
+                        "codigo": codigo if codigo else None,
+                        "categoria": categoria,
                         "descricao": descricao,
-                        "preco_venda": preco,
-                        "custo_producao": custo,
-                        "estoque": estoque,
+                        "ingredientes": ingredientes,
+                        "preco_venda": float(preco_venda),
+                        "custo_producao": float(custo_producao),
+                        "estoque": int(estoque_inicial),
                         "data_cadastro": datetime.now(),
-                        "ativo": True
+                        "ultima_atualizacao": datetime.now(),
+                        "ativo": True,
+                        "destaque": False
                     }
+                    
                     try:
-                        produtos_col.insert_one(novo_produto)
-                        st.success("Produto cadastrado com sucesso!")
+                        result = produtos_col.insert_one(novo_produto)
+                        st.success(f"Produto cadastrado com sucesso! ID: {result.inserted_id}")
+                        st.balloons()
                     except Exception as e:
-                        st.error(f"Erro ao cadastrar produto: {e}")
-                else:
-                    st.error("Preencha os campos obrigatórios (*)")
+                        st.error(f"Erro ao cadastrar produto: {str(e)}")
 
     with tab2:
         st.subheader("Produtos Cadastrados")
-        produtos = list(produtos_col.find({"ativo": True}))
+        
+        # Filtros
+        col_filtro1, col_filtro2, col_filtro3 = st.columns(3)
+        with col_filtro1:
+            filtro_categoria = st.selectbox(
+                "Filtrar por categoria",
+                ["Todas"] + list(produtos_col.distinct("categoria")),
+                index=0
+            )
+        with col_filtro2:
+            filtro_estoque = st.selectbox(
+                "Filtrar por estoque",
+                ["Todos", "Em estoque", "Estoque baixo", "Sem estoque"],
+                index=0
+            )
+        with col_filtro3:
+            filtro_ativo = st.selectbox(
+                "Status",
+                ["Ativos", "Inativos", "Todos"],
+                index=0
+            )
+        
+        # Consulta com filtros
+        query = {}
+        if filtro_categoria != "Todas":
+            query["categoria"] = filtro_categoria
+        if filtro_estoque == "Em estoque":
+            query["estoque"] = {"$gt": 0}
+        elif filtro_estoque == "Estoque baixo":
+            query["estoque"] = {"$lt": 10, "$gt": 0}
+        elif filtro_estoque == "Sem estoque":
+            query["estoque"] = 0
+        if filtro_ativo == "Ativos":
+            query["ativo"] = True
+        elif filtro_ativo == "Inativos":
+            query["ativo"] = False
+
+        produtos = list(produtos_col.find(query).sort("nome", 1))
         
         if produtos:
-            df = pd.DataFrame(produtos)
-            # Remover colunas não necessárias para exibição
-            df = df.drop(columns=['_id', 'ativo'], errors='ignore')
-            st.dataframe(df, use_container_width=True)
-
+            # Preparação dos dados para exibição
+            dados = []
+            for p in produtos:
+                dados.append({
+                    "ID": str(p["_id"]),
+                    "Nome": p["nome"],
+                    "Código": p.get("codigo", "-"),
+                    "Categoria": p["categoria"],
+                    "Preço": f"R$ {p['preco_venda']:.2f}",
+                    "Custo": f"R$ {p.get('custo_producao', 0):.2f}",
+                    "Estoque": p["estoque"],
+                    "Status": "Ativo" if p.get("ativo", False) else "Inativo"
+                })
+            
+            df = pd.DataFrame(dados)
+            
+            # Estilo condicional para estoque baixo
+            def estilo_linha(row):
+                estilo = []
+                if row['Estoque'] == 0:
+                    estilo.append('color: red')
+                elif row['Estoque'] < 10:
+                    estilo.append('color: orange')
+                else:
+                    estilo.append('color: green')
+                return estilo * len(row)
+            
+            st.dataframe(
+                df.style.apply(estilo_linha, axis=1),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "ID": st.column_config.Column(disabled=True),
+                    "Preço": st.column_config.NumberColumn(format="R$ %.2f"),
+                    "Custo": st.column_config.NumberColumn(format="R$ %.2f")
+                }
+            )
+            
             # Edição de produtos
-            with st.expander("Editar Produto"):
-                produto_selecionado = st.selectbox(
-                    "Selecione o produto",
-                    options=[str(produto['_id']) for produto in produtos],
-                    format_func=lambda x: f"{produtos_col.find_one({'_id': ObjectId(x)})['nome']} - Estoque: {produtos_col.find_one({'_id': ObjectId(x)})['estoque']}"
+            with st.expander("📝 Editar Produto", expanded=False):
+                produto_editar = st.selectbox(
+                    "Selecione o produto para editar",
+                    [p["_id"] for p in produtos],
+                    format_func=lambda x: next(p["nome"] for p in produtos if p["_id"] == x)
                 )
-
-                if produto_selecionado:
-                    dados_produto = produtos_col.find_one({"_id": ObjectId(produto_selecionado)})
-
-                    with st.form("form_editar_produto"):
-                        novo_nome = st.text_input("Nome", value=dados_produto.get('nome', ''))
-                        nova_descricao = st.text_area("Descrição", value=dados_produto.get('descricao', ''))
-                        novo_preco = st.number_input(
-                            "Preço", 
-                            min_value=0.0, 
-                            step=0.01, 
-                            value=float(dados_produto.get('preco_venda', 0))
+                
+                if produto_editar:
+                    produto = produtos_col.find_one({"_id": produto_editar})
+                    with st.form(f"form_editar_{produto_editar}"):
+                        col_e1, col_e2 = st.columns(2)
+                        
+                        with col_e1:
+                            novo_nome = st.text_input("Nome", value=produto["nome"])
+                            novo_codigo = st.text_input("Código", value=produto.get("codigo", ""))
+                            nova_categoria = st.selectbox(
+                                "Categoria",
+                                ["Doce", "Salgado", "Bebida", "Outros"],
+                                index=["Doce", "Salgado", "Bebida", "Outros"].index(produto["categoria"])
+                            )
+                            
+                        with col_e2:
+                            novo_preco = st.number_input(
+                                "Preço", 
+                                min_value=0.01, 
+                                step=0.01, 
+                                value=float(produto["preco_venda"])
+                            )
+                            novo_custo = st.number_input(
+                                "Custo", 
+                                min_value=0.0, 
+                                step=0.01, 
+                                value=float(produto.get("custo_producao", 0))
+                            )
+                            novo_status = st.checkbox(
+                                "Ativo", 
+                                value=produto.get("ativo", True)
+                            )
+                        
+                        nova_descricao = st.text_area(
+                            "Descrição", 
+                            value=produto.get("descricao", "")
                         )
-                        novo_custo = st.number_input(
-                            "Custo", 
-                            min_value=0.0, 
-                            step=0.01, 
-                            value=float(dados_produto.get('custo_producao', 0))
+                        novos_ingredientes = st.text_area(
+                            "Ingredientes", 
+                            value=produto.get("ingredientes", "")
                         )
-                        novo_estoque = st.number_input(
-                            "Estoque", 
-                            min_value=0, 
-                            step=1, 
-                            value=int(dados_produto.get('estoque', 0))
-                        )
-
-                        if st.form_submit_button("Atualizar"):
+                        
+                        if st.form_submit_button("Atualizar Produto"):
+                            atualizacao = {
+                                "$set": {
+                                    "nome": novo_nome,
+                                    "codigo": novo_codigo if novo_codigo else None,
+                                    "categoria": nova_categoria,
+                                    "descricao": nova_descricao,
+                                    "ingredientes": novos_ingredientes,
+                                    "preco_venda": novo_preco,
+                                    "custo_producao": novo_custo,
+                                    "ativo": novo_status,
+                                    "ultima_atualizacao": datetime.now()
+                                }
+                            }
+                            
                             try:
                                 produtos_col.update_one(
-                                    {"_id": ObjectId(produto_selecionado)},
-                                    {"$set": {
-                                        "nome": novo_nome,
-                                        "descricao": nova_descricao,
-                                        "preco_venda": novo_preco,
-                                        "custo_producao": novo_custo,
-                                        "estoque": novo_estoque
-                                    }}
+                                    {"_id": produto_editar},
+                                    atualizacao
                                 )
-                                st.success("Produto atualizado!")
+                                st.success("Produto atualizado com sucesso!")
                                 st.rerun()
                             except Exception as e:
-                                st.error(f"Erro ao atualizar produto: {e}")
+                                st.error(f"Erro ao atualizar produto: {str(e)}")
         else:
-            st.info("Nenhum produto cadastrado ainda.")
+            st.info("Nenhum produto encontrado com os filtros selecionados.")
+
+    with tab3:
+        st.subheader("Gerenciamento de Estoque")
+        
+        produtos_estoque = list(produtos_col.find({"ativo": True}).sort("nome", 1))
+        
+        if produtos_estoque:
+            produto_selecionado = st.selectbox(
+                "Selecione o produto",
+                [p["_id"] for p in produtos_estoque],
+                format_func=lambda x: next(f"{p['nome']} (Estoque: {p['estoque']})" for p in produtos_estoque if p["_id"] == x)
+            )
+            
+            if produto_selecionado:
+                produto = produtos_col.find_one({"_id": produto_selecionado})
+                st.write(f"**Produto selecionado:** {produto['nome']}")
+                st.write(f"**Estoque atual:** {produto['estoque']} unidades")
+                
+                col_m1, col_m2 = st.columns(2)
+                
+                with col_m1:
+                    with st.form("form_entrada_estoque"):
+                        entrada = st.number_input(
+                            "Quantidade de entrada", 
+                            min_value=1, 
+                            step=1, 
+                            value=1,
+                            key="entrada"
+                        )
+                        motivo_entrada = st.text_input("Motivo da entrada (opcional)")
+                        
+                        if st.form_submit_button("Registrar Entrada"):
+                            novo_estoque = produto["estoque"] + entrada
+                            produtos_col.update_one(
+                                {"_id": produto_selecionado},
+                                {
+                                    "$set": {"estoque": novo_estoque},
+                                    "$push": {
+                                        "movimentacoes": {
+                                            "tipo": "entrada",
+                                            "quantidade": entrada,
+                                            "data": datetime.now(),
+                                            "motivo": motivo_entrada if motivo_entrada else None,
+                                            "responsavel": "Sistema"  # Poderia ser substituído por usuário logado
+                                        }
+                                    }
+                                }
+                            )
+                            st.success(f"Entrada de {entrada} unidades registrada. Novo estoque: {novo_estoque}")
+                            st.rerun()
+                
+                with col_m2:
+                    with st.form("form_saida_estoque"):
+                        saida = st.number_input(
+                            "Quantidade de saída", 
+                            min_value=1, 
+                            step=1, 
+                            max_value=produto["estoque"],
+                            value=1,
+                            key="saida"
+                        )
+                        motivo_saida = st.text_input("Motivo da saída (opcional)")
+                        
+                        if st.form_submit_button("Registrar Saída"):
+                            novo_estoque = produto["estoque"] - saida
+                            produtos_col.update_one(
+                                {"_id": produto_selecionado},
+                                {
+                                    "$set": {"estoque": novo_estoque},
+                                    "$push": {
+                                        "movimentacoes": {
+                                            "tipo": "saída",
+                                            "quantidade": saida,
+                                            "data": datetime.now(),
+                                            "motivo": motivo_saida if motivo_saida else None,
+                                            "responsavel": "Sistema"
+                                        }
+                                    }
+                                }
+                            )
+                            st.success(f"Saída de {saida} unidades registrada. Novo estoque: {novo_estoque}")
+                            st.rerun()
+                
+                # Histórico de movimentações
+                if "movimentacoes" in produto and produto["movimentacoes"]:
+                    st.subheader("Histórico de Movimentações")
+                    historico = sorted(
+                        produto["movimentacoes"], 
+                        key=lambda x: x["data"], 
+                        reverse=True
+                    )[:20]  # Limita às últimas 20 movimentações
+                    
+                    for mov in historico:
+                        cor = "green" if mov["tipo"] == "entrada" else "red"
+                        st.markdown(
+                            f"""
+                            <div style="border-left: 4px solid {cor}; padding-left: 10px; margin: 5px 0;">
+                                <b>{mov['tipo'].upper()}</b> - {mov['quantidade']} unidades<br>
+                                <small>{mov['data'].strftime('%d/%m/%Y %H:%M')} | {mov.get('motivo', 'Sem motivo informado')}</small>
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
+        else:
+            st.info("Nenhum produto ativo disponível para gerenciamento de estoque.")
 
 # =============================================
 # MÓDULO DE VENDAS
