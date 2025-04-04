@@ -12,17 +12,38 @@ from bson.objectid import ObjectId
 # =============================================
 
 # Configuração da conexão (substitua pela sua URI do MongoDB Atlas)
-MONGO_URI = "mongodb+srv://brunorodrigo:123Putao@cluster0.lrr3cgd.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+MONGO_URI = 'mongodb+srv://brunorodrigo:123Putao@cluster0.lrr3cgd.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0'
 
 # Conexão segura com o MongoDB Atlas
 def get_database():
     try:
-        client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
-        db = client['sistema_vendas']
+        client = MongoClient(
+            MONGO_URI,
+            tlsCAFile=certifi.where(),
+            serverSelectionTimeoutMS=5000,  # Timeout de 5 segundos
+            connectTimeoutMS=30000,  # Timeout de conexão de 30 segundos
+            socketTimeoutMS=30000  # Timeout de socket de 30 segundos
+        )
+        
+        # Testa a conexão
+        client.admin.command('ping')
+        db = client.get_database()
+        
+        # Verifica se as coleções existem
+        required_collections = ['clientes', 'produtos', 'vendas', 'itens_venda']
+        for coll in required_collections:
+            if coll not in db.list_collection_names():
+                db.create_collection(coll)
+                
         return db
+        
     except Exception as e:
-        st.error(f"Erro ao conectar ao MongoDB: {e}")
-        return None
+        st.error(f"Falha na conexão com o MongoDB: {str(e)}")
+        st.error("Verifique:")
+        st.error("1. Sua conexão com a internet")
+        st.error("2. As credenciais do MongoDB Atlas")
+        st.error("3. Se o cluster está ativo")
+        st.stop()
 
 # =============================================
 # MÓDULO DE CLIENTES
@@ -31,78 +52,26 @@ def modulo_clientes(db):
     st.title("📋 Gestão de Clientes")
     clientes_col = db['clientes']
 
-    tab1, tab2 = st.tabs(["Cadastrar", "Listar/Editar"])
-
-    with tab1:
-        st.subheader("Novo Cliente")
-        with st.form("form_cliente"):
-            nome = st.text_input("Nome Completo*")
-            celular = st.text_input("Celular*")
-            email = st.text_input("Email")
-            endereco = st.text_area("Endereço")
-
-            if st.form_submit_button("Salvar"):
-                if nome and celular:
-                    novo_cliente = {
-                        "nome": nome,
-                        "celular": celular,
-                        "email": email,
-                        "endereco": endereco,
-                        "data_cadastro": datetime.now(),
-                        "ativo": True
-                    }
-                    try:
-                        clientes_col.insert_one(novo_cliente)
-                        st.success("Cliente cadastrado com sucesso!")
-                    except Exception as e:
-                        st.error(f"Erro ao cadastrar cliente: {e}")
-                else:
-                    st.error("Campos obrigatórios (*) não preenchidos!")
-
-    with tab2:
-        st.subheader("Clientes Cadastrados")
-        clientes = list(clientes_col.find({"ativo": True}))
+    try:
+        # Consulta com tratamento de erro específico
+        clientes = list(clientes_col.find({"ativo": True}).limit(100))  # Limite para evitar sobrecarga
         
-        if clientes:
-            df = pd.DataFrame(clientes)
-            # Remover colunas não necessárias para exibição
-            df = df.drop(columns=['_id', 'ativo'], errors='ignore')
-            st.dataframe(df, use_container_width=True)
-
-            # Edição de clientes
-            with st.expander("Editar Cliente"):
-                cliente_selecionado = st.selectbox(
-                    "Selecione o cliente",
-                    options=[str(cliente['_id']) for cliente in clientes],
-                    format_func=lambda x: f"{clientes_col.find_one({'_id': ObjectId(x)})['nome']} - {clientes_col.find_one({'_id': ObjectId(x)})['celular']}"
-                )
-
-                if cliente_selecionado:
-                    dados_cliente = clientes_col.find_one({"_id": ObjectId(cliente_selecionado)})
-
-                    with st.form("form_editar_cliente"):
-                        novo_nome = st.text_input("Nome", value=dados_cliente.get('nome', ''))
-                        novo_celular = st.text_input("Celular", value=dados_cliente.get('celular', ''))
-                        novo_email = st.text_input("Email", value=dados_cliente.get('email', ''))
-                        novo_endereco = st.text_area("Endereço", value=dados_cliente.get('endereco', ''))
-
-                        if st.form_submit_button("Atualizar"):
-                            try:
-                                clientes_col.update_one(
-                                    {"_id": ObjectId(cliente_selecionado)},
-                                    {"$set": {
-                                        "nome": novo_nome,
-                                        "celular": novo_celular,
-                                        "email": novo_email,
-                                        "endereco": novo_endereco
-                                    }}
-                                )
-                                st.success("Cliente atualizado!")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Erro ao atualizar cliente: {e}")
-        else:
+        if not clientes:
             st.info("Nenhum cliente cadastrado ainda.")
+            return
+            
+        # Processamento seguro dos ObjectIds
+        clientes_processed = []
+        for cliente in clientes:
+            cliente['id'] = str(cliente['_id'])
+            clientes_processed.append(cliente)
+            
+        df = pd.DataFrame(clientes_processed).drop(columns=['_id', 'ativo'], errors='ignore')
+        st.dataframe(df)
+        
+    except Exception as e:
+        st.error(f"Erro ao carregar clientes: {str(e)}")
+        return
 
 # =============================================
 # MÓDULO DE PRODUTOS
