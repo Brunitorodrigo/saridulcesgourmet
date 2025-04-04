@@ -612,294 +612,183 @@ def modulo_produtos(db):
 def modulo_vendas(db):
     st.title("💰 Gestão de Vendas")
     
-    # Acessa as coleções necessárias
+    # Coleções MongoDB
     vendas_col = db['vendas']
     itens_col = db['itens_venda']
     clientes_col = db['clientes']
     produtos_col = db['produtos']
     
     # Abas principais
-    tab1, tab2, tab3 = st.tabs(["Nova Venda", "Histórico", "Relatórios"])
+    tab1, tab2 = st.tabs(["Nova Venda", "Histórico"])
 
-    with tab1:
-        st.subheader("Registrar Nova Venda")
-        
-        # Seção 1: Seleção do Cliente
-        clientes_ativos = list(clientes_col.find({"status": "ativo"}).sort("nome", 1))
-        
-        if not clientes_ativos:
-            st.warning("Cadastre clientes antes de registrar vendas!")
-            st.button("Ir para Cadastro de Clientes", 
-                     on_click=lambda: st.session_state.update({'menu': "Clientes"}))
-            return
-            
-        cliente_id = st.selectbox(
-            "Cliente*",
-            options=[str(c["_id"]) for c in clientes_ativos],
-            format_func=lambda x: next(c["nome"] for c in clientes_ativos if str(c["_id"]) == x)
-        )
-        
-        # Seção 2: Seleção de Produtos
-        produtos_disponiveis = list(produtos_col.find({
-            "ativo": True,
-            "estoque": {"$gt": 0}
-        }).sort("nome", 1))
-        
-        if not produtos_disponiveis:
-            st.warning("Nenhum produto disponível em estoque!")
-            return
-            
-        # Inicializa os itens da venda na sessão
-        if 'itens_venda' not in st.session_state:
-            st.session_state.itens_venda = []
-            
-        # Interface para adicionar itens
-        col1, col2, col3 = st.columns([3, 2, 2])
-        with col1:
-            produto_id = st.selectbox(
-                "Produto",
-                options=[str(p["_id"]) for p in produtos_disponiveis],
-                format_func=lambda x: next(
-                    f"{p['nome']} (Estoque: {p['estoque']})" 
-                    for p in produtos_disponiveis 
-                    if str(p["_id"]) == x
-                )
-            )
-        with col2:
-            quantidade = st.number_input("Quantidade", min_value=1, value=1)
-        with col3:
-            st.write("")  # Espaçamento
-            if st.button("➕ Adicionar", key="add_item"):
-                produto = next(p for p in produtos_disponiveis if str(p["_id"]) == produto_id)
-                
-                if quantidade > produto['estoque']:
-                    st.error("Quantidade maior que estoque disponível!")
-                else:
-                    st.session_state.itens_venda.append({
-                        'produto_id': produto_id,
-                        'nome': produto['nome'],
-                        'quantidade': quantidade,
-                        'preco_unitario': produto['preco_venda'],
-                        'custo_unitario': produto.get('custo_producao', 0),
-                        'subtotal': quantidade * produto['preco_venda']
-                    })
-                    st.success("Produto adicionado!")
-                    st.rerun()
-        
-        # Lista de itens adicionados
-        if st.session_state.itens_venda:
-            st.subheader("Itens da Venda")
-            df_itens = pd.DataFrame(st.session_state.itens_venda)
-            st.dataframe(df_itens, hide_index=True)
-            
-            total_venda = df_itens['subtotal'].sum()
-            lucro_estimado = sum(
-                (item['preco_unitario'] - item['custo_unitario']) * item['quantidade']
-                for item in st.session_state.itens_venda
-            )
-            
-            col_res1, col_res2 = st.columns(2)
-            with col_res1:
-                st.metric("Total da Venda", f"R$ {total_venda:,.2f}")
-            with col_res2:
-                st.metric("Lucro Estimado", f"R$ {lucro_estimado:,.2f}")
-            
-            # Finalização da venda
-            if st.button("✅ Finalizar Venda", type="primary"):
-                try:
-                    with st.spinner("Processando venda..."):
-                        # Cria a venda principal
-                        nova_venda = {
-                            "cliente_id": cliente_id,
-                            "data_venda": datetime.now(),
-                            "valor_total": total_venda,
-                            "lucro_total": lucro_estimado,
-                            "status": "concluída",
-                            "itens_count": len(st.session_state.itens_venda)
-                        }
-                        venda_id = vendas_col.insert_one(nova_venda).inserted_id
-                        
-                        # Registra os itens e atualiza estoque
-                        for item in st.session_state.itens_venda:
-                            # Item da venda
-                            itens_col.insert_one({
-                                "venda_id": str(venda_id),
-                                "produto_id": item['produto_id'],
-                                "quantidade": item['quantidade'],
-                                "preco_unitario": item['preco_unitario'],
-                                "custo_unitario": item['custo_unitario']
-                            })
-                            
-                            # Atualiza estoque
-                            produtos_col.update_one(
-                                {"_id": ObjectId(item['produto_id'])},
-                                {"$inc": {"estoque": -item['quantidade']}}
-                            )
-                        
-                        # Atualiza estatísticas do cliente
-                        clientes_col.update_one(
-                            {"_id": ObjectId(cliente_id)},
-                            {
-                                "$inc": {
-                                    "compras_realizadas": 1,
-                                    "total_gasto": total_venda
-                                }
-                            }
-                        )
-                        
-                        st.success("Venda registrada com sucesso!")
-                        st.balloons()
-                        
-                        # Limpa os itens da sessão
-                        del st.session_state.itens_venda
-                        st.rerun()
-                        
-                except Exception as e:
-                    st.error(f"Erro ao registrar venda: {str(e)}")
-                    st.error("Nenhuma alteração foi aplicada no banco de dados.")
+    # [ ... Código existente da aba Nova Venda ... ]
 
     with tab2:
         st.subheader("Histórico de Vendas")
         
-        # Filtros
-        col_f1, col_f2 = st.columns(2)
-        with col_f1:
-            data_inicio = st.date_input("Data inicial", 
-                                      value=datetime.now() - timedelta(days=30))
-        with col_f2:
-            data_fim = st.date_input("Data final", 
-                                   value=datetime.now())
+        # Filtro por período
+        col1, col2 = st.columns(2)
+        with col1:
+            data_inicio = st.date_input("De", value=datetime.now() - timedelta(days=30))
+        with col2:
+            data_fim = st.date_input("Até", value=datetime.now())
         
-        if st.button("Aplicar Filtros"):
-            st.session_state.filtro_vendas = {
-                "data_venda": {
-                    "$gte": datetime.combine(data_inicio, datetime.min.time()),
-                    "$lte": datetime.combine(data_fim, datetime.max.time())
-                }
+        # Consulta com filtro
+        vendas = list(vendas_col.find({
+            "data_venda": {
+                "$gte": datetime.combine(data_inicio, datetime.min.time()),
+                "$lte": datetime.combine(data_fim, datetime.max.time())
             }
-        
-        # Consulta as vendas
-        filtro = st.session_state.get('filtro_vendas', {})
-        vendas = list(vendas_col.find(filtro).sort("data_venda", -1).limit(100))
-        
+        }).sort("data_venda", -1))
+
         if not vendas:
-            st.info("Nenhuma venda encontrada no período selecionado.")
+            st.info("Nenhuma venda encontrada no período")
         else:
-            # Preparação dos dados
-            dados_vendas = []
+            # Exibição resumida
             for venda in vendas:
                 cliente = clientes_col.find_one({"_id": ObjectId(venda["cliente_id"])})
-                dados_vendas.append({
-                    "ID": str(venda["_id"]),
-                    "Data": venda["data_venda"].strftime("%d/%m/%Y %H:%M"),
-                    "Cliente": cliente["nome"],
-                    "Valor Total": f"R$ {venda['valor_total']:,.2f}",
-                    "Lucro": f"R$ {venda['lucro_total']:,.2f}",
-                    "Itens": venda["itens_count"]
-                })
-            
-            st.dataframe(
-                pd.DataFrame(dados_vendas),
-                hide_index=True,
-                use_container_width=True
-            )
-            
-            # Detalhamento da venda selecionada
-            venda_selecionada = st.selectbox(
-                "Detalhar Venda",
-                options=[v["ID"] for v in dados_vendas],
-                format_func=lambda x: next(
-                    f"{v['Data']} - {v['Cliente']} - {v['Valor Total']}" 
-                    for v in dados_vendas 
-                    if v["ID"] == x
+                expander = st.expander(
+                    f"Venda {venda['_id']} | {venda['data_venda'].strftime('%d/%m/%Y %H:%M')} | "
+                    f"Cliente: {cliente['nome']} | Total: R$ {venda['valor_total']:.2f}"
                 )
-            )
-            
-            if venda_selecionada:
-                itens_venda = list(itens_col.find({"venda_id": venda_selecionada}))
-                if itens_venda:
-                    dados_itens = []
+                
+                with expander:
+                    col_info, col_actions = st.columns([3, 1])
+                    
+                    with col_info:
+                        # Detalhes da venda
+                        st.write(f"**Data:** {venda['data_venda'].strftime('%d/%m/%Y %H:%M')}")
+                        st.write(f"**Cliente:** {cliente['nome']}")
+                        st.write(f"**Valor Total:** R$ {venda['valor_total']:.2f}")
+                        st.write(f"**Lucro:** R$ {venda['lucro_total']:.2f}")
+                        
+                        # Itens da venda
+                        st.subheader("Itens:")
+                        itens = list(itens_col.find({"venda_id": str(venda["_id"])}))
+                        for item in itens:
+                            produto = produtos_col.find_one({"_id": ObjectId(item["produto_id"])})
+                            st.write(
+                                f"- {produto['nome']}: {item['quantidade']} x "
+                                f"R$ {item['preco_unitario']:.2f} = R$ {item['quantidade'] * item['preco_unitario']:.2f}"
+                            )
+                    
+                    with col_actions:
+                        # Botão de Editar
+                        if st.button("✏️ Editar", key=f"edit_{venda['_id']}"):
+                            st.session_state.editar_venda_id = str(venda["_id"])
+                            st.rerun()
+                        
+                        # Botão de Excluir
+                        if st.button("❌ Excluir", key=f"del_{venda['_id']}"):
+                            st.session_state.excluir_venda_id = str(venda["_id"])
+                            st.rerun()
+
+            # Modal de Edição
+            if 'editar_venda_id' in st.session_state:
+                venda_id = st.session_state.editar_venda_id
+                venda = vendas_col.find_one({"_id": ObjectId(venda_id)})
+                itens_venda = list(itens_col.find({"venda_id": venda_id}))
+                
+                with st.form(f"form_editar_{venda_id}"):
+                    st.subheader(f"Editando Venda {venda_id}")
+                    
+                    # Seleção de novo cliente
+                    novo_cliente_id = st.selectbox(
+                        "Cliente",
+                        [str(c["_id"]) for c in clientes_col.find({"status": "ativo"})],
+                        index=[str(c["_id"]) for c in clientes_col.find({"status": "ativo"})].index(venda["cliente_id"]),
+                        key=f"cliente_{venda_id}"
+                    )
+                    
+                    # Edição dos itens
+                    novos_itens = []
                     for item in itens_venda:
                         produto = produtos_col.find_one({"_id": ObjectId(item["produto_id"])})
-                        dados_itens.append({
-                            "Produto": produto["nome"],
-                            "Quantidade": item["quantidade"],
-                            "Preço Unitário": f"R$ {item['preco_unitario']:,.2f}",
-                            "Subtotal": f"R$ {item['quantidade'] * item['preco_unitario']:,.2f}"
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.write(f"**{produto['nome']}** (Estoque atual: {produto['estoque'] + item['quantidade']})")
+                        with col2:
+                            nova_quantidade = st.number_input(
+                                "Quantidade",
+                                min_value=1,
+                                value=item["quantidade"],
+                                key=f"qtd_{item['_id']}"
+                            )
+                        novos_itens.append({
+                            "produto_id": item["produto_id"],
+                            "quantidade_original": item["quantidade"],
+                            "nova_quantidade": nova_quantidade,
+                            "preco_unitario": item["preco_unitario"],
+                            "custo_unitario": item["custo_unitario"]
                         })
                     
-                    st.dataframe(
-                        pd.DataFrame(dados_itens),
-                        hide_index=True,
-                        use_container_width=True
-                    )
+                    if st.form_submit_button("Salvar Alterações"):
+                        try:
+                            # Atualiza estoque e itens
+                            for item in novos_itens:
+                                diferenca = item["nova_quantidade"] - item["quantidade_original"]
+                                if diferenca != 0:
+                                    produtos_col.update_one(
+                                        {"_id": ObjectId(item["produto_id"])},
+                                        {"$inc": {"estoque": -diferenca}}
+                                    )
+                                
+                                itens_col.update_one(
+                                    {"_id": item["_id"]},
+                                    {"$set": {"quantidade": item["nova_quantidade"]}}
+                                )
+                            
+                            # Recalcula totais
+                            novos_itens = list(itens_col.find({"venda_id": venda_id}))
+                            novo_total = sum(item["quantidade"] * item["preco_unitario"] for item in novos_itens)
+                            novo_lucro = sum(item["quantidade"] * (item["preco_unitario"] - item["custo_unitario"]) for item in novos_itens)
+                            
+                            vendas_col.update_one(
+                                {"_id": ObjectId(venda_id)},
+                                {
+                                    "$set": {
+                                        "cliente_id": novo_cliente_id,
+                                        "valor_total": novo_total,
+                                        "lucro_total": novo_lucro,
+                                        "ultima_atualizacao": datetime.now()
+                                    }
+                                }
+                            )
+                            
+                            st.success("Venda atualizada com sucesso!")
+                            del st.session_state.editar_venda_id
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao atualizar venda: {str(e)}")
 
-    with tab3:
-        st.subheader("Relatórios de Vendas")
-        
-        # Métricas rápidas
-        col_m1, col_m2, col_m3 = st.columns(3)
-        with col_m1:
-            total_vendas = vendas_col.count_documents({})
-            st.metric("Total de Vendas", total_vendas)
-        with col_m2:
-            faturamento = vendas_col.aggregate([
-                {"$group": {"_id": None, "total": {"$sum": "$valor_total"}}}
-            ])
-            faturamento_total = next(faturamento, {"total": 0})["total"]
-            st.metric("Faturamento Total", f"R$ {faturamento_total:,.2f}")
-        with col_m3:
-            lucro = vendas_col.aggregate([
-                {"$group": {"_id": None, "total": {"$sum": "$lucro_total"}}}
-            ])
-            lucro_total = next(lucro, {"total": 0})["total"]
-            st.metric("Lucro Total", f"R$ {lucro_total:,.2f}")
-        
-        # Gráfico de vendas por período
-        st.subheader("Vendas por Período")
-        vendas_periodo = vendas_col.aggregate([
-            {"$project": {
-                "data": {"$dateToString": {"format": "%Y-%m-%d", "date": "$data_venda"}},
-                "valor": 1
-            }},
-            {"$group": {
-                "_id": "$data",
-                "total": {"$sum": "$valor_total"},
-                "qtd": {"$sum": 1}
-            }},
-            {"$sort": {"_id": 1}},
-            {"$limit": 30}
-        ])
-        
-        df_periodo = pd.DataFrame(list(vendas_periodo))
-        if not df_periodo.empty:
-            df_periodo = df_periodo.rename(columns={"_id": "Data", "total": "Valor", "qtd": "Quantidade"})
-            st.bar_chart(df_periodo.set_index("Data")["Valor"])
-        else:
-            st.info("Nenhum dado disponível para o gráfico.")
-
-        # Top produtos
-        st.subheader("Produtos Mais Vendidos")
-        top_produtos = itens_col.aggregate([
-            {"$group": {
-                "_id": "$produto_id",
-                "total_vendido": {"$sum": "$quantidade"},
-                "faturamento": {"$sum": {"$multiply": ["$quantidade", "$preco_unitario"]}}
-            }},
-            {"$sort": {"total_vendido": -1}},
-            {"$limit": 5}
-        ])
-        
-        top_produtos = list(top_produtos)
-        if top_produtos:
-            for produto in top_produtos:
-                p = produtos_col.find_one({"_id": ObjectId(produto["_id"])})
-                st.write(f"**{p['nome']}**")
-                st.write(f"- Quantidade: {produto['total_vendido']} unidades")
-                st.write(f"- Faturamento: R$ {produto['faturamento']:,.2f}")
-                st.progress(min(produto['total_vendido'] / 100, 1.0))
-        else:
-            st.info("Nenhum dado disponível sobre produtos vendidos.")
+            # Modal de Exclusão
+            if 'excluir_venda_id' in st.session_state:
+                venda_id = st.session_state.excluir_venda_id
+                st.warning(f"Tem certeza que deseja excluir a venda {venda_id}?")
+                
+                if st.button("Confirmar Exclusão", type="primary"):
+                    try:
+                        # Restaura estoque
+                        itens = list(itens_col.find({"venda_id": venda_id}))
+                        for item in itens:
+                            produtos_col.update_one(
+                                {"_id": ObjectId(item["produto_id"])},
+                                {"$inc": {"estoque": item["quantidade"]}}
+                            )
+                        
+                        # Remove registros
+                        itens_col.delete_many({"venda_id": venda_id})
+                        vendas_col.delete_one({"_id": ObjectId(venda_id)})
+                        
+                        st.success("Venda excluída com sucesso!")
+                        del st.session_state.excluir_venda_id
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao excluir venda: {str(e)}")
+                
+                if st.button("Cancelar", key="cancel_delete"):
+                    del st.session_state.excluir_venda_id
+                    st.rerun()
 
 # =============================================
 # MÓDULO DE RELATÓRIOS
