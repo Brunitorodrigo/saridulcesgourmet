@@ -1347,281 +1347,566 @@ def modulo_vendas(db):
 
 def modulo_relatorios(db):
     verificar_autenticacao(db)
-    st.title("📊 Relatórios Avançados")
+    st.title("📊 Painel Estratégico")
     
     vendas_col = db['vendas']
     produtos_col = db['produtos']
     clientes_col = db['clientes']
     itens_col = db['itens_venda']
+    usuarios_col = db['usuarios']
 
-    tab1, tab2, tab3 = st.tabs(["📈 Vendas", "📦 Produtos", "👥 Clientes"])
+    tab1, tab2, tab3 = st.tabs(["📈 Visão Geral", "📦 Produtos", "👥 Clientes"])
 
     with tab1:
-        st.subheader("Relatório Analítico de Vendas")
+        st.subheader("Visão Geral do Negócio")
         
+        # Filtros por período
         col1, col2 = st.columns(2)
         with col1:
             data_inicio = st.date_input(
                 "Data Início",
                 value=datetime.now() - timedelta(days=30),
-                key="rel_vendas_inicio"
+                key="geral_inicio"
             )
         with col2:
             data_fim = st.date_input(
                 "Data Fim",
                 value=datetime.now(),
-                key="rel_vendas_fim"
+                key="geral_fim"
             )
         
-        if st.button("Gerar Relatório de Vendas", key="btn_rel_vendas"):
+        if st.button("Atualizar Relatório", key="btn_atualizar_geral"):
             try:
-                pipeline = [
-                    {
-                        "$match": {
-                            "data_venda": {
-                                "$gte": datetime.combine(data_inicio, datetime.min.time()),
-                                "$lte": datetime.combine(data_fim, datetime.max.time())
-                            },
-                            "status": "concluída"
-                        }
+                # Filtro de período
+                filtro_periodo = {
+                    "data_venda": {
+                        "$gte": datetime.combine(data_inicio, datetime.min.time()),
+                        "$lte": datetime.combine(data_fim, datetime.max.time())
                     },
-                    {
-                        "$lookup": {
-                            "from": "clientes",
-                            "localField": "cliente_id",
-                            "foreignField": "_id",
-                            "as": "cliente"
-                        }
-                    },
-                    {
-                        "$unwind": "$cliente"
-                    },
-                    {
-                        "$sort": {"data_venda": -1}
-                    }
-                ]
+                    "status": "concluída"
+                }
                 
-                vendas = list(vendas_col.aggregate(pipeline))
+                # 1. Métricas Principais
+                st.subheader("🔍 Métricas Principais")
                 
-                if vendas:
-                    dados_vendas = []
-                    for venda in vendas:
-                        dados_vendas.append({
-                            "ID": str(venda["_id"]),
-                            "Data": venda["data_venda"].strftime("%d/%m/%Y %H:%M"),
-                            "Cliente": venda["cliente"]["nome"],
-                            "Valor Total": venda["valor_total"],
-                            "Lucro": venda["lucro_total"],
-                            "Pagamento": venda["metodo_pagamento"].capitalize(),
-                            "Itens": venda["itens_count"]
-                        })
+                # Consultas principais
+                total_vendas = vendas_col.count_documents(filtro_periodo)
+                
+                faturamento_result = vendas_col.aggregate([
+                    {"$match": filtro_periodo},
+                    {"$group": {"_id": None, "total": {"$sum": "$valor_total"}}}
+                ])
+                faturamento_total = next(faturamento_result, {"total": 0})["total"]
+                
+                lucro_result = vendas_col.aggregate([
+                    {"$match": filtro_periodo},
+                    {"$group": {"_id": None, "total": {"$sum": "$lucro_total"}}}
+                ])
+                lucro_total = next(lucro_result, {"total": 0})["total"]
+                
+                # Clientes ativos
+                clientes_ativos = clientes_col.count_documents({"status": "ativo"})
+                
+                # Produtos ativos
+                produtos_ativos = produtos_col.count_documents({"ativo": True})
+                
+                # Exibe métricas em colunas
+                col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+                with col_m1:
+                    st.metric("Total de Vendas", total_vendas)
+                with col_m2:
+                    st.metric("Faturamento Total", f"R$ {faturamento_total:,.2f}")
+                with col_m3:
+                    st.metric("Lucro Total", f"R$ {lucro_total:,.2f}")
+                with col_m4:
+                    st.metric("Margem Líquida", f"{(lucro_total/faturamento_total*100 if faturamento_total > 0 else 0):.1f}%")
+                
+                col_m5, col_m6, col_m7, col_m8 = st.columns(4)
+                with col_m5:
+                    st.metric("Clientes Ativos", clientes_ativos)
+                with col_m6:
+                    st.metric("Produtos Ativos", produtos_ativos)
+                with col_m7:
+                    ticket_medio = faturamento_total/total_vendas if total_vendas > 0 else 0
+                    st.metric("Ticket Médio", f"R$ {ticket_medio:,.2f}")
+                with col_m8:
+                    usuarios_ativos = usuarios_col.count_documents({"ativo": True})
+                    st.metric("Usuários Ativos", usuarios_ativos)
+                
+                # 2. Análise Temporal
+                st.subheader("📅 Análise Temporal")
+                
+                # Vendas por dia
+                vendas_diarias = vendas_col.aggregate([
+                    {"$match": filtro_periodo},
+                    {"$project": {
+                        "data": {"$dateToString": {"format": "%Y-%m-%d", "date": "$data_venda"}},
+                        "valor_total": 1,
+                        "lucro_total": 1
+                    }},
+                    {"$group": {
+                        "_id": "$data",
+                        "total_vendas": {"$sum": 1},
+                        "total_faturamento": {"$sum": "$valor_total"},
+                        "total_lucro": {"$sum": "$lucro_total"}
+                    }},
+                    {"$sort": {"_id": 1}}
+                ])
+                
+                df_diario = pd.DataFrame(list(vendas_diarias))
+                if not df_diario.empty:
+                    df_diario['_id'] = pd.to_datetime(df_diario['_id'])
+                    df_diario = df_diario.set_index('_id')
                     
-                    df_vendas = pd.DataFrame(dados_vendas)
-                    
-                    # Métricas resumidas
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Total de Vendas", len(df_vendas))
-                    with col2:
-                        st.metric("Faturamento Total", f"R$ {df_vendas['Valor Total'].sum():,.2f}")
-                    with col3:
-                        st.metric("Lucro Total", f"R$ {df_vendas['Lucro'].sum():,.2f}")
-                    
-                    # Gráficos
-                    st.subheader("Análise Temporal")
-                    df_vendas['Data'] = pd.to_datetime(df_vendas['Data'], format='%d/%m/%Y %H:%M')
-                    df_vendas['Dia'] = df_vendas['Data'].dt.date
-                    
-                    vendas_dia = df_vendas.groupby('Dia').agg({
-                        'Valor Total': 'sum',
-                        'ID': 'count'
-                    }).rename(columns={'ID': 'Quantidade'})
-                    
-                    tab1, tab2 = st.tabs(["Valor", "Quantidade"])
+                    tab1, tab2, tab3 = st.tabs(["Vendas", "Faturamento", "Lucro"])
                     with tab1:
-                        st.line_chart(vendas_dia['Valor Total'])
+                        st.line_chart(df_diario['total_vendas'])
                     with tab2:
-                        st.bar_chart(vendas_dia['Quantidade'])
-                    
-                    # Análise por forma de pagamento
-                    st.subheader("Por Forma de Pagamento")
-                    pagamento_analise = df_vendas.groupby('Pagamento').agg({
-                        'Valor Total': ['sum', 'count'],
-                        'Lucro': 'sum'
+                        st.line_chart(df_diario['total_faturamento'])
+                    with tab3:
+                        st.line_chart(df_diario['total_lucro'])
+                else:
+                    st.info("Nenhuma venda no período selecionado.")
+                
+                # 3. Métricas por Forma de Pagamento
+                st.subheader("💳 Análise por Forma de Pagamento")
+                
+                pagamento_analise = vendas_col.aggregate([
+                    {"$match": filtro_periodo},
+                    {"$group": {
+                        "_id": "$metodo_pagamento",
+                        "total_vendas": {"$sum": 1},
+                        "total_faturamento": {"$sum": "$valor_total"},
+                        "total_lucro": {"$sum": "$lucro_total"}
+                    }},
+                    {"$addFields": {
+                        "percentual_faturamento": {
+                            "$multiply": [
+                                {"$divide": ["$total_faturamento", faturamento_total]},
+                                100
+                            ]
+                        },
+                        "ticket_medio": {
+                            "$divide": ["$total_faturamento", "$total_vendas"]
+                        }
+                    }},
+                    {"$sort": {"total_faturamento": -1}}
+                ])
+                
+                df_pagamento = pd.DataFrame(list(pagamento_analise))
+                if not df_pagamento.empty:
+                    df_pagamento = df_pagamento.rename(columns={
+                        "_id": "Pagamento",
+                        "total_vendas": "Vendas",
+                        "total_faturamento": "Faturamento",
+                        "total_lucro": "Lucro",
+                        "percentual_faturamento": "% Faturamento",
+                        "ticket_medio": "Ticket Médio"
                     })
-                    st.dataframe(pagamento_analise)
                     
-                    # Exportação
-                    excel_data = generate_excel(df_vendas)
-                    st.download_button(
-                        label="📥 Exportar para Excel",
-                        data=excel_data,
-                        file_name=f"relatorio_vendas_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    # Formata valores
+                    df_pagamento['Faturamento'] = df_pagamento['Faturamento'].apply(lambda x: f"R$ {x:,.2f}")
+                    df_pagamento['Lucro'] = df_pagamento['Lucro'].apply(lambda x: f"R$ {x:,.2f}")
+                    df_pagamento['% Faturamento'] = df_pagamento['% Faturamento'].apply(lambda x: f"{x:.1f}%")
+                    df_pagamento['Ticket Médio'] = df_pagamento['Ticket Médio'].apply(lambda x: f"R$ {x:,.2f}")
+                    
+                    st.dataframe(
+                        df_pagamento,
+                        column_order=["Pagamento", "Vendas", "Faturamento", "Lucro", "% Faturamento", "Ticket Médio"],
+                        hide_index=True,
+                        use_container_width=True
                     )
                 else:
-                    st.info("Nenhuma venda encontrada no período selecionado.")
-            except Exception as e:
-                st.error(f"Erro ao gerar relatório: {str(e)}")
-
-    with tab2:
-        st.subheader("Relatório de Produtos")
-        
-        if st.button("Gerar Relatório de Produtos", key="btn_rel_produtos"):
-            try:
-                pipeline = [
-                    {
-                        "$lookup": {
-                            "from": "itens_venda",
-                            "localField": "_id",
-                            "foreignField": "produto_id",
-                            "as": "itens_venda"
-                        }
-                    },
-                    {
-                        "$project": {
-                            "nome": 1,
-                            "categoria": 1,
-                            "preco_venda": 1,
-                            "custo_producao": 1,
-                            "estoque": 1,
-                            "vendidos": {"$sum": "$itens_venda.quantidade"},
-                            "faturamento": {
-                                "$sum": {
-                                    "$map": {
-                                        "input": "$itens_venda",
-                                        "as": "item",
-                                        "in": {"$multiply": ["$$item.quantidade", "$$item.preco_unitario"]}
-                                    }
-                                }
-                            },
-                            "lucro": {
-                                "$sum": {
-                                    "$map": {
-                                        "input": "$itens_venda",
-                                        "as": "item",
-                                        "in": {
-                                            "$multiply": [
-                                                {"$subtract": ["$$item.preco_unitario", "$custo_producao"]},
-                                                "$$item.quantidade"
-                                            ]
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    {
-                        "$sort": {"vendidos": -1}
-                    }
-                ]
+                    st.info("Nenhum dado disponível sobre formas de pagamento.")
                 
-                produtos = list(produtos_col.aggregate(pipeline))
+                # 4. Indicadores de Desempenho
+                st.subheader("📊 Indicadores de Desempenho")
                 
-                if produtos:
-                    df_produtos = pd.DataFrame(produtos)
-                    
-                    # Métricas resumidas
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Total de Produtos", len(df_produtos))
-                    with col2:
-                        st.metric("Faturamento Total", f"R$ {df_produtos['faturamento'].sum():,.2f}")
-                    with col3:
-                        st.metric("Lucro Total", f"R$ {df_produtos['lucro'].sum():,.2f}")
-                    
-                    # Análise por categoria
-                    st.subheader("Por Categoria")
-                    categoria_analise = df_produtos.groupby('categoria').agg({
-                        'vendidos': 'sum',
-                        'faturamento': 'sum',
-                        'lucro': 'sum'
-                    })
-                    st.dataframe(categoria_analise)
-                    
-                    # Top produtos
-                    st.subheader("Top 10 Produtos Mais Vendidos")
-                    top_produtos = df_produtos.sort_values('vendidos', ascending=False).head(10)
-                    st.bar_chart(top_produtos.set_index('nome')['vendidos'])
-                    
-                    # Exportação
-                    excel_data = generate_excel(df_produtos)
-                    st.download_button(
-                        label="📥 Exportar para Excel",
-                        data=excel_data,
-                        file_name=f"relatorio_produtos_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                # Comparativo com período anterior
+                periodo_anterior = {
+                    "$gte": datetime.combine(data_inicio - timedelta(days=(data_fim - data_inicio).days), 
+                    "$lte": datetime.combine(data_inicio - timedelta(days=1), 
+                }
+                
+                faturamento_anterior = next(vendas_col.aggregate([
+                    {"$match": {"data_venda": periodo_anterior, "status": "concluída"}},
+                    {"$group": {"_id": None, "total": {"$sum": "$valor_total"}}}
+                ]), {"total": 0})["total"]
+                
+                variacao_faturamento = ((faturamento_total - faturamento_anterior) / faturamento_anterior * 100) if faturamento_anterior > 0 else 0
+                
+                col_i1, col_i2, col_i3 = st.columns(3)
+                with col_i1:
+                    st.metric(
+                        "Faturamento vs Período Anterior",
+                        f"R$ {faturamento_total:,.2f}",
+                        delta=f"{variacao_faturamento:.1f}%",
+                        delta_color="normal" if variacao_faturamento >= 0 else "inverse"
                     )
-                else:
-                    st.info("Nenhum dado disponível sobre produtos.")
-            except Exception as e:
-                st.error(f"Erro ao gerar relatório: {str(e)}")
-
-    with tab3:
-        st.subheader("Relatório de Clientes")
-        
-        if st.button("Gerar Relatório de Clientes", key="btn_rel_clientes"):
-            try:
-                pipeline = [
-                    {
-                        "$lookup": {
+                with col_i2:
+                    produtos_mais_vendidos = list(itens_col.aggregate([
+                        {"$lookup": {
+                            "from": "vendas",
+                            "localField": "venda_id",
+                            "foreignField": "_id",
+                            "as": "venda"
+                        }},
+                        {"$unwind": "$venda"},
+                        {"$match": filtro_periodo},
+                        {"$group": {
+                            "_id": "$produto_id",
+                            "total_vendido": {"$sum": "$quantidade"}
+                        }},
+                        {"$sort": {"total_vendido": -1}},
+                        {"$limit": 1}
+                    ]))
+                    
+                    if produtos_mais_vendidos:
+                        produto = produtos_col.find_one({"_id": produtos_mais_vendidos[0]["_id"]})
+                        st.metric(
+                            "Produto Mais Vendido",
+                            produto["nome"],
+                            delta=f"{produtos_mais_vendidos[0]['total_vendido']} unidades"
+                        )
+                    else:
+                        st.metric("Produto Mais Vendido", "Nenhum")
+                with col_i3:
+                    cliente_top = next(clientes_col.aggregate([
+                        {"$lookup": {
                             "from": "vendas",
                             "localField": "_id",
                             "foreignField": "cliente_id",
                             "as": "vendas"
-                        }
-                    },
-                    {
-                        "$project": {
+                        }},
+                        {"$match": {"vendas.data_venda": filtro_periodo["data_venda"]}},
+                        {"$project": {
                             "nome": 1,
-                            "tipo": 1,
-                            "total_compras": {"$size": "$vendas"},
-                            "total_gasto": {"$sum": "$vendas.valor_total"},
-                            "ultima_compra": {"$max": "$vendas.data_venda"}
-                        }
-                    },
-                    {
-                        "$sort": {"total_gasto": -1}
-                    }
+                            "total_gasto": {"$sum": "$vendas.valor_total"}
+                        }},
+                        {"$sort": {"total_gasto": -1}},
+                        {"$limit": 1}
+                    ]), None)
+                    
+                    if cliente_top:
+                        st.metric(
+                            "Cliente Top",
+                            cliente_top["nome"],
+                            delta=f"R$ {cliente_top['total_gasto']:,.2f}"
+                        )
+                    else:
+                        st.metric("Cliente Top", "Nenhum")
+                
+            except Exception as e:
+                st.error(f"Erro ao gerar relatório: {str(e)}")
+
+    with tab2:
+        st.subheader("Análise de Produtos")
+        
+        if st.button("Atualizar Relatório de Produtos", key="btn_atualizar_produtos"):
+            try:
+                # 1. Métricas de Produtos
+                st.subheader("📦 Métricas de Produtos")
+                
+                # Consultas principais
+                pipeline_estoque = [
+                    {"$match": {"ativo": True}},
+                    {"$group": {
+                        "_id": None,
+                        "total_estoque": {"$sum": "$estoque"},
+                        "valor_estoque": {"$sum": {"$multiply": ["$estoque", "$preco_venda"]}},
+                        "custo_estoque": {"$sum": {"$multiply": ["$estoque", "$custo_producao"]}}
+                    }}
                 ]
                 
-                clientes = list(clientes_col.aggregate(pipeline))
+                estoque_data = next(produtos_col.aggregate(pipeline_estoque), {
+                    "total_estoque": 0,
+                    "valor_estoque": 0,
+                    "custo_estoque": 0
+                })
                 
-                if clientes:
-                    df_clientes = pd.DataFrame(clientes)
+                # Vendas de produtos
+                pipeline_vendas = [
+                    {"$lookup": {
+                        "from": "itens_venda",
+                        "localField": "_id",
+                        "foreignField": "produto_id",
+                        "as": "itens_venda"
+                    }},
+                    {"$project": {
+                        "nome": 1,
+                        "categoria": 1,
+                        "preco_venda": 1,
+                        "custo_producao": 1,
+                        "estoque": 1,
+                        "vendidos": {"$sum": "$itens_venda.quantidade"},
+                        "faturamento": {
+                            "$sum": {
+                                "$map": {
+                                    "input": "$itens_venda",
+                                    "as": "item",
+                                    "in": {"$multiply": ["$$item.quantidade", "$$item.preco_unitario"]}
+                                }
+                            }
+                        },
+                        "lucro": {
+                            "$sum": {
+                                "$map": {
+                                    "input": "$itens_venda",
+                                    "as": "item",
+                                    "in": {
+                                        "$multiply": [
+                                            {"$subtract": ["$$item.preco_unitario", "$custo_producao"]},
+                                            "$$item.quantidade"
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    }},
+                    {"$sort": {"vendidos": -1}}
+                ]
+                
+                produtos_data = list(produtos_col.aggregate(pipeline_vendas))
+                
+                # Exibe métricas
+                col_p1, col_p2, col_p3, col_p4 = st.columns(4)
+                with col_p1:
+                    st.metric("Produtos Ativos", produtos_col.count_documents({"ativo": True}))
+                with col_p2:
+                    st.metric("Total em Estoque", estoque_data["total_estoque"])
+                with col_p3:
+                    st.metric("Valor do Estoque", f"R$ {estoque_data['valor_estoque']:,.2f}")
+                with col_p4:
+                    st.metric("Custo do Estoque", f"R$ {estoque_data['custo_estoque']:,.2f}")
+                
+                # 2. Análise por Categoria
+                st.subheader("📊 Análise por Categoria")
+                
+                if produtos_data:
+                    df_produtos = pd.DataFrame(produtos_data)
                     
-                    # Métricas resumidas
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Total de Clientes", len(df_clientes))
-                    with col2:
-                        st.metric("Faturamento Total", f"R$ {df_clientes['total_gasto'].sum():,.2f}")
-                    with col3:
-                        st.metric("Compras Realizadas", df_clientes['total_compras'].sum())
+                    categoria_analise = df_produtos.groupby('categoria').agg({
+                        'nome': 'count',
+                        'vendidos': 'sum',
+                        'faturamento': 'sum',
+                        'lucro': 'sum'
+                    }).rename(columns={
+                        'nome': 'Quantidade',
+                        'vendidos': 'Unidades Vendidas',
+                        'faturamento': 'Faturamento',
+                        'lucro': 'Lucro'
+                    })
                     
-                    # Clientes mais valiosos
-                    st.subheader("Top 10 Clientes (Por Valor Gasto)")
-                    top_clientes = df_clientes.sort_values('total_gasto', ascending=False).head(10)
-                    st.bar_chart(top_clientes.set_index('nome')['total_gasto'])
+                    categoria_analise['Margem'] = (categoria_analise['Lucro'] / categoria_analise['Faturamento']) * 100
                     
-                    # Análise por tipo de cliente
-                    st.subheader("Por Tipo de Cliente")
+                    st.dataframe(
+                        categoria_analise,
+                        column_config={
+                            "Faturamento": st.column_config.NumberColumn(format="R$ %.2f"),
+                            "Lucro": st.column_config.NumberColumn(format="R$ %.2f"),
+                            "Margem": st.column_config.NumberColumn(format="%.1f%%")
+                        },
+                        use_container_width=True
+                    )
+                    
+                    # 3. Top Produtos
+                    st.subheader("🏆 Top Produtos")
+                    
+                    top_col1, top_col2 = st.columns(2)
+                    
+                    with top_col1:
+                        st.markdown("**Mais Vendidos (Quantidade)**")
+                        top_vendidos = df_produtos.sort_values('vendidos', ascending=False).head(5)
+                        st.dataframe(
+                            top_vendidos[['nome', 'categoria', 'vendidos']],
+                            column_config={
+                                "vendidos": "Unidades Vendidas"
+                            },
+                            hide_index=True
+                        )
+                    
+                    with top_col2:
+                        st.markdown("**Maior Faturamento**")
+                        top_faturamento = df_produtos.sort_values('faturamento', ascending=False).head(5)
+                        st.dataframe(
+                            top_faturamento[['nome', 'categoria', 'faturamento']],
+                            column_config={
+                                "faturamento": st.column_config.NumberColumn(format="R$ %.2f")
+                            },
+                            hide_index=True
+                        )
+                    
+                    # 4. Produtos em Risco
+                    st.subheader("⚠️ Produtos em Risco")
+                    
+                    risco_col1, risco_col2 = st.columns(2)
+                    
+                    with risco_col1:
+                        st.markdown("**Estoque Baixo (<10 unidades)**")
+                        estoque_baixo = df_produtos[df_produtos['estoque'] < 10].sort_values('estoque')
+                        if not estoque_baixo.empty:
+                            st.dataframe(
+                                estoque_baixo[['nome', 'categoria', 'estoque']],
+                                hide_index=True
+                            )
+                        else:
+                            st.success("Nenhum produto com estoque baixo!")
+                    
+                    with risco_col2:
+                        st.markdown("**Sem Vendas Recentes**")
+                        produtos_sem_vendas = df_produtos[df_produtos['vendidos'] == 0]
+                        if not produtos_sem_vendas.empty:
+                            st.dataframe(
+                                produtos_sem_vendas[['nome', 'categoria', 'estoque']],
+                                hide_index=True
+                            )
+                        else:
+                            st.success("Todos os produtos tiveram vendas!")
+                    
+                else:
+                    st.info("Nenhum dado disponível sobre produtos.")
+                
+            except Exception as e:
+                st.error(f"Erro ao gerar relatório: {str(e)}")
+
+    with tab3:
+        st.subheader("Análise de Clientes")
+        
+        # Filtros para clientes
+        col_c1, col_c2 = st.columns(2)
+        with col_c1:
+            data_inicio_clientes = st.date_input(
+                "Data Início",
+                value=datetime.now() - timedelta(days=90),
+                key="clientes_inicio"
+            )
+        with col_c2:
+            data_fim_clientes = st.date_input(
+                "Data Fim",
+                value=datetime.now(),
+                key="clientes_fim"
+            )
+        
+        if st.button("Atualizar Relatório de Clientes", key="btn_atualizar_clientes"):
+            try:
+                # Filtro de período
+                filtro_periodo_clientes = {
+                    "data_venda": {
+                        "$gte": datetime.combine(data_inicio_clientes, datetime.min.time()),
+                        "$lte": datetime.combine(data_fim_clientes, datetime.max.time())
+                    },
+                    "status": "concluída"
+                }
+                
+                # 1. Métricas de Clientes
+                st.subheader("👥 Métricas de Clientes")
+                
+                # Consultas principais
+                total_clientes = clientes_col.count_documents({})
+                clientes_ativos = clientes_col.count_documents({"status": "ativo"})
+                
+                pipeline_clientes = [
+                    {"$lookup": {
+                        "from": "vendas",
+                        "localField": "_id",
+                        "foreignField": "cliente_id",
+                        "as": "vendas"
+                    }},
+                    {"$project": {
+                        "nome": 1,
+                        "tipo": 1,
+                        "status": 1,
+                        "total_compras": {"$size": "$vendas"},
+                        "total_gasto": {"$sum": "$vendas.valor_total"},
+                        "ultima_compra": {"$max": "$vendas.data_venda"}
+                    }},
+                    {"$sort": {"total_gasto": -1}}
+                ]
+                
+                clientes_data = list(clientes_col.aggregate(pipeline_clientes))
+                
+                # Exibe métricas
+                col_c1, col_c2, col_c3, col_c4 = st.columns(4)
+                with col_c1:
+                    st.metric("Total de Clientes", total_clientes)
+                with col_c2:
+                    st.metric("Clientes Ativos", clientes_ativos)
+                with col_c3:
+                    clientes_compraram = len([c for c in clientes_data if c["total_compras"] > 0])
+                    st.metric("Clientes que Compraram", clientes_compraram)
+                with col_c4:
+                    st.metric("Taxa de Retenção", f"{(clientes_compraram/clientes_ativos*100 if clientes_ativos > 0 else 0):.1f}%")
+                
+                # 2. Segmentação de Clientes
+                st.subheader("📊 Segmentação de Clientes")
+                
+                if clientes_data:
+                    df_clientes = pd.DataFrame(clientes_data)
+                    
+                    # Análise por tipo
                     tipo_analise = df_clientes.groupby('tipo').agg({
+                        'nome': 'count',
                         'total_compras': 'sum',
                         'total_gasto': 'sum'
+                    }).rename(columns={
+                        'nome': 'Quantidade',
+                        'total_compras': 'Compras',
+                        'total_gasto': 'Faturamento'
                     })
-                    st.dataframe(tipo_analise)
                     
-                    # Exportação
-                    excel_data = generate_excel(df_clientes)
-                    st.download_button(
-                        label="📥 Exportar para Excel",
-                        data=excel_data,
-                        file_name=f"relatorio_clientes_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    tipo_analise['Ticket Médio'] = tipo_analise['Faturamento'] / tipo_analise['Compras']
+                    
+                    st.dataframe(
+                        tipo_analise,
+                        column_config={
+                            "Faturamento": st.column_config.NumberColumn(format="R$ %.2f"),
+                            "Ticket Médio": st.column_config.NumberColumn(format="R$ %.2f")
+                        },
+                        use_container_width=True
                     )
+                    
+                    # 3. Clientes VIP
+                    st.subheader("🏆 Clientes VIP (Top 10)")
+                    
+                    clientes_vip = df_clientes[df_clientes['total_compras'] > 0].sort_values('total_gasto', ascending=False).head(10)
+                    
+                    if not clientes_vip.empty:
+                        st.dataframe(
+                            clientes_vip[['nome', 'tipo', 'total_compras', 'total_gasto']],
+                            column_config={
+                                "total_compras": "Compras",
+                                "total_gasto": st.column_config.NumberColumn("Faturamento", format="R$ %.2f")
+                            },
+                            hide_index=True,
+                            use_container_width=True
+                        )
+                    else:
+                        st.info("Nenhum cliente com compras no período.")
+                    
+                    # 4. Clientes Inativos
+                    st.subheader("💤 Clientes Inativos (Sem compras nos últimos 90 dias)")
+                    
+                    limite_inatividade = datetime.now() - timedelta(days=90)
+                    clientes_inativos = df_clientes[
+                        (df_clientes['ultima_compra'].isna()) | 
+                        (df_clientes['ultima_compra'] < limite_inatividade)
+                    ]
+                    
+                    if not clientes_inativos.empty:
+                        st.dataframe(
+                            clientes_inativos[['nome', 'tipo', 'ultima_compra']],
+                            column_config={
+                                "ultima_compra": st.column_config.DatetimeColumn("Última Compra", format="DD/MM/YYYY")
+                            },
+                            hide_index=True,
+                            use_container_width=True
+                        )
+                    else:
+                        st.success("Todos os clientes fizeram compras recentemente!")
+                    
                 else:
                     st.info("Nenhum dado disponível sobre clientes.")
+                
             except Exception as e:
                 st.error(f"Erro ao gerar relatório: {str(e)}")
 
