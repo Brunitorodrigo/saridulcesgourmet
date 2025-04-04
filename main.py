@@ -51,293 +51,180 @@ def get_database():
 def modulo_clientes(db):
     st.title("👥 Gestão de Clientes")
     clientes_col = db['clientes']
-
-    tab1, tab2, tab3 = st.tabs(["Cadastrar", "Listar/Editar", "Análises"])
-
+    
+    # CSS para melhorar a visibilidade das abas
+    st.markdown("""
+    <style>
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 8px;
+        }
+        .stTabs [data-baseweb="tab"] {
+            padding: 8px 16px;
+            background: #f0f2f6;
+            border-radius: 4px 4px 0 0;
+        }
+        .stTabs [aria-selected="true"] {
+            background: #ffffff;
+            font-weight: bold;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # Cria as abas principais
+    tab1, tab2 = st.tabs(["📝 Cadastrar Novo Cliente", "📋 Listar/Editar Clientes"])
+    
     with tab1:
-        st.subheader("Cadastro de Cliente")
+        st.subheader("Formulário de Cadastro")
         with st.form("form_cliente", clear_on_submit=True):
             col1, col2 = st.columns(2)
             
             with col1:
-                nome = st.text_input("Nome Completo*", max_chars=100)
+                nome = st.text_input("Nome Completo*", key="nome_cadastro")
                 data_nascimento = st.date_input("Data de Nascimento", 
                                               min_value=datetime(1900, 1, 1),
                                               max_value=datetime.now())
-                cpf = st.text_input("CPF", 
-                                   help="Formato: 123.456.789-00",
-                                   max_chars=14)
                 
             with col2:
-                celular = st.text_input("Celular*", 
-                                      max_chars=15,
+                celular = st.text_input("Celular*", key="celular_cadastro",
                                       help="Formato: (99) 99999-9999")
-                email = st.text_input("E-mail", 
-                                    type="default",
-                                    help="exemplo@dominio.com")
-                
-            endereco = st.text_area("Endereço Completo")
-            observacoes = st.text_area("Observações/Notas")
+                email = st.text_input("E-mail", key="email_cadastro")
             
-            if st.form_submit_button("Cadastrar Cliente"):
+            endereco = st.text_area("Endereço Completo", key="endereco_cadastro")
+            observacoes = st.text_area("Observações", key="obs_cadastro")
+            
+            if st.form_submit_button("Salvar Cliente", type="primary"):
                 if not nome or not celular:
                     st.error("Campos obrigatórios (*) não preenchidos!")
                 else:
-                    novo_cliente = {
-                        "nome": nome,
-                        "data_nascimento": data_nascimento,
-                        "cpf": cpf if cpf else None,
-                        "contato": {
-                            "celular": celular,
-                            "email": email if email else None
-                        },
-                        "endereco": endereco if endereco else None,
-                        "observacoes": observacoes if observacoes else None,
-                        "data_cadastro": datetime.now(),
-                        "ultima_atualizacao": datetime.now(),
-                        "status": "ativo",
-                        "tipo": "consumidor_final",  # ['consumidor_final', 'revendedor', 'empresa']
-                        "compras_realizadas": 0,
-                        "total_gasto": 0.0
-                    }
-                    
                     try:
-                        # Verifica se CPF já existe
-                        if cpf:
-                            existe = clientes_col.count_documents({"cpf": cpf}, limit=1)
-                            if existe > 0:
-                                st.warning("Já existe um cliente cadastrado com este CPF")
-                                return
-                        
-                        result = clientes_col.insert_one(novo_cliente)
-                        st.success(f"Cliente cadastrado com sucesso! ID: {result.inserted_id}")
+                        novo_cliente = {
+                            "nome": nome,
+                            "data_nascimento": data_nascimento,
+                            "celular": celular,
+                            "email": email if email else None,
+                            "endereco": endereco if endereco else None,
+                            "observacoes": observacoes if observacoes else None,
+                            "data_cadastro": datetime.now(),
+                            "ultima_atualizacao": datetime.now(),
+                            "status": "ativo"
+                        }
+                        clientes_col.insert_one(novo_cliente)
+                        st.success("Cliente cadastrado com sucesso!")
                         st.balloons()
+                        time.sleep(1)
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Erro ao cadastrar cliente: {str(e)}")
-
+    
     with tab2:
-        st.subheader("Clientes Cadastrados")
+        st.subheader("Lista de Clientes")
         
-        # Filtros avançados
-        with st.expander("🔍 Filtros", expanded=False):
-            col_f1, col_f2, col_f3 = st.columns(3)
-            with col_f1:
-                filtro_nome = st.text_input("Filtrar por nome")
-            with col_f2:
-                filtro_status = st.selectbox(
-                    "Status",
-                    ["Todos", "Ativo", "Inativo"],
-                    index=0
-                )
-            with col_f3:
-                filtro_tipo = st.selectbox(
-                    "Tipo de cliente",
-                    ["Todos", "Consumidor Final", "Revendedor", "Empresa"],
-                    index=0
-                )
-        
-        # Construção da query
-        query = {}
-        if filtro_nome:
-            query["nome"] = {"$regex": filtro_nome, "$options": "i"}
-        if filtro_status != "Todos":
-            query["status"] = "ativo" if filtro_status == "Ativo" else "inativo"
-        if filtro_tipo != "Todos":
-            tipo_map = {
-                "Consumidor Final": "consumidor_final",
-                "Revendedor": "revendedor",
-                "Empresa": "empresa"
-            }
-            query["tipo"] = tipo_map[filtro_tipo]
-        
-        # Consulta com paginação
-        clientes = list(clientes_col.find(query).sort("nome", 1).limit(100))
-        
-        if clientes:
-            # Preparação dos dados para exibição
-            dados = []
-            for c in clientes:
-                dados.append({
-                    "ID": str(c["_id"]),
-                    "Nome": c["nome"],
-                    "Contato": f"{c['contato']['celular']}" + 
-                              (f"\n{c['contato']['email']}" if c['contato'].get('email') else ""),
-                    "Tipo": "Consumidor" if c["tipo"] == "consumidor_final" else c["tipo"].capitalize(),
-                    "Cadastro": c["data_cadastro"].strftime("%d/%m/%Y"),
-                    "Compras": c.get("compras_realizadas", 0),
-                    "Total Gasto": f"R$ {c.get('total_gasto', 0):.2f}",
-                    "Status": c["status"].capitalize()
-                })
+        try:
+            # Consulta todos os clientes ativos
+            clientes = list(clientes_col.find({"status": "ativo"}).sort("nome", 1))
             
-            df = pd.DataFrame(dados)
-            
-            # Estilo condicional
-            def estilo_linha(row):
-                estilo = []
-                if row['Status'] == 'Inativo':
-                    estilo.append('color: gray')
-                elif row['Tipo'] == 'Revendedor':
-                    estilo.append('color: blue')
-                elif row['Tipo'] == 'Empresa':
-                    estilo.append('color: green')
-                return estilo * len(row)
-            
-            st.dataframe(
-                df.style.apply(estilo_linha, axis=1),
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "ID": st.column_config.Column(disabled=True),
-                    "Total Gasto": st.column_config.NumberColumn(format="R$ %.2f")
-                }
-            )
-            
-            # Edição detalhada
-            with st.expander("✏️ Editar Cliente", expanded=False):
-                cliente_editar = st.selectbox(
-                    "Selecione o cliente para editar",
-                    [c["_id"] for c in clientes],
-                    format_func=lambda x: next(c["nome"] for c in clientes if c["_id"] == x)
+            if not clientes:
+                st.info("Nenhum cliente cadastrado ainda.")
+                st.button("Cadastrar Primeiro Cliente", 
+                         on_click=lambda: st.session_state.update({'redirect_to_tab1': True}),
+                         type="primary")
+            else:
+                # Exibe a tabela de clientes
+                df = pd.DataFrame([{
+                    "ID": str(cliente["_id"]),
+                    "Nome": cliente["nome"],
+                    "Celular": cliente["celular"],
+                    "E-mail": cliente.get("email", "-"),
+                    "Cadastro": cliente["data_cadastro"].strftime("%d/%m/%Y")
+                } for cliente in clientes])
+                
+                st.dataframe(
+                    df,
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={
+                        "ID": st.column_config.Column(disabled=True),
+                    }
                 )
                 
-                if cliente_editar:
-                    cliente = clientes_col.find_one({"_id": cliente_editar})
-                    with st.form(f"form_editar_{cliente_editar}"):
+                # Seção de Edição
+                st.subheader("Editar Cliente")
+                cliente_selecionado = st.selectbox(
+                    "Selecione o cliente para editar",
+                    options=[cliente["_id"] for cliente in clientes],
+                    format_func=lambda x: next(cliente["nome"] for cliente in clientes if cliente["_id"] == x),
+                    key="select_editar"
+                )
+                
+                if cliente_selecionado:
+                    cliente = clientes_col.find_one({"_id": cliente_selecionado})
+                    with st.form("form_editar_cliente"):
                         col_e1, col_e2 = st.columns(2)
                         
                         with col_e1:
-                            novo_nome = st.text_input("Nome", value=cliente["nome"])
-                            novo_cpf = st.text_input("CPF", 
-                                                    value=cliente.get("cpf", ""),
-                                                    max_chars=14)
+                            novo_nome = st.text_input("Nome", value=cliente["nome"], key="nome_editar")
+                            novo_celular = st.text_input("Celular", value=cliente["celular"], key="celular_editar")
+                            
+                        with col_e2:
+                            novo_email = st.text_input("E-mail", value=cliente.get("email", ""), key="email_editar")
                             novo_status = st.selectbox(
                                 "Status",
                                 ["ativo", "inativo"],
-                                index=0 if cliente["status"] == "ativo" else 1
-                            )
-                            
-                        with col_e2:
-                            novo_celular = st.text_input(
-                                "Celular", 
-                                value=cliente["contato"]["celular"],
-                                max_chars=15
-                            )
-                            novo_email = st.text_input(
-                                "E-mail", 
-                                value=cliente["contato"].get("email", "")
-                            )
-                            novo_tipo = st.selectbox(
-                                "Tipo de cliente",
-                                ["consumidor_final", "revendedor", "empresa"],
-                                index=["consumidor_final", "revendedor", "empresa"].index(cliente["tipo"])
+                                index=0 if cliente.get("status", "ativo") == "ativo" else 1,
+                                key="status_editar"
                             )
                         
-                        novo_endereco = st.text_area(
-                            "Endereço", 
-                            value=cliente.get("endereco", "")
-                        )
-                        novas_obs = st.text_area(
-                            "Observações", 
-                            value=cliente.get("observacoes", "")
-                        )
+                        novo_endereco = st.text_area("Endereço", value=cliente.get("endereco", ""), key="endereco_editar")
+                        novas_obs = st.text_area("Observações", value=cliente.get("observacoes", ""), key="obs_editar")
                         
-                        if st.form_submit_button("Atualizar Cliente"):
+                        if st.form_submit_button("Atualizar Cliente", type="primary"):
                             atualizacao = {
                                 "$set": {
                                     "nome": novo_nome,
-                                    "cpf": novo_cpf if novo_cpf else None,
-                                    "contato": {
-                                        "celular": novo_celular,
-                                        "email": novo_email if novo_email else None
-                                    },
+                                    "celular": novo_celular,
+                                    "email": novo_email if novo_email else None,
                                     "endereco": novo_endereco if novo_endereco else None,
                                     "observacoes": novas_obs if novas_obs else None,
                                     "status": novo_status,
-                                    "tipo": novo_tipo,
                                     "ultima_atualizacao": datetime.now()
                                 }
                             }
-                            
                             try:
-                                # Verifica se CPF já existe para outro cliente
-                                if novo_cpf and novo_cpf != cliente.get("cpf", ""):
-                                    existe = clientes_col.count_documents({
-                                        "cpf": novo_cpf,
-                                        "_id": {"$ne": cliente_editar}
-                                    }, limit=1)
-                                    if existe > 0:
-                                        st.warning("CPF já cadastrado para outro cliente")
-                                        return
-                                
-                                clientes_col.update_one(
-                                    {"_id": cliente_editar},
-                                    atualizacao
-                                )
+                                clientes_col.update_one({"_id": cliente_selecionado}, atualizacao)
                                 st.success("Cliente atualizado com sucesso!")
                                 st.rerun()
                             except Exception as e:
-                                st.error(f"Erro ao atualizar cliente: {str(e)}")
-        else:
-            st.info("Nenhum cliente encontrado com os filtros selecionados.")
-
-    with tab3:
-        st.subheader("Análises de Clientes")
+                                st.error(f"Erro ao atualizar: {str(e)}")
+                
+                # Seção de Exclusão
+                st.subheader("Remover Cliente")
+                cliente_remover = st.selectbox(
+                    "Selecione o cliente para remover",
+                    options=[cliente["_id"] for cliente in clientes],
+                    format_func=lambda x: next(cliente["nome"] for cliente in clientes if cliente["_id"] == x),
+                    key="select_remover"
+                )
+                
+                if cliente_remover and st.button("Confirmar Remoção", type="primary"):
+                    try:
+                        clientes_col.update_one(
+                            {"_id": cliente_remover},
+                            {"$set": {"status": "inativo"}}
+                        )
+                        st.success("Cliente marcado como inativo!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao remover: {str(e)}")
         
-        col_a1, col_a2 = st.columns(2)
-        
-        with col_a1:
-            st.metric("Total de Clientes", 
-                     clientes_col.count_documents({}))
-            st.metric("Clientes Ativos", 
-                     clientes_col.count_documents({"status": "ativo"}))
-            
-            # Distribuição por tipo
-            tipos = clientes_col.aggregate([
-                {"$group": {"_id": "$tipo", "count": {"$sum": 1}}},
-                {"$project": {"tipo": "$_id", "count": 1, "_id": 0}}
-            ])
-            
-            df_tipos = pd.DataFrame(list(tipos))
-            if not df_tipos.empty:
-                df_tipos['tipo'] = df_tipos['tipo'].map({
-                    "consumidor_final": "Consumidor",
-                    "revendedor": "Revendedor",
-                    "empresa": "Empresa"
-                })
-                st.bar_chart(df_tipos.set_index('tipo'))
-        
-        with col_a2:
-            # Top clientes
-            top_clientes = list(clientes_col.find(
-                {"status": "ativo"}
-            ).sort("total_gasto", -1).limit(5))
-            
-            if top_clientes:
-                st.write("**Top Clientes por Valor Gasto**")
-                for i, cliente in enumerate(top_clientes, 1):
-                    st.write(f"{i}. {cliente['nome']} - R$ {cliente['total_gasto']:.2f}")
-            
-            # Evolução de cadastros
-            evolucao = clientes_col.aggregate([
-                {"$project": {
-                    "ano_mes": {
-                        "$dateToString": {
-                            "format": "%Y-%m",
-                            "date": "$data_cadastro"
-                        }
-                    }
-                }},
-                {"$group": {
-                    "_id": "$ano_mes",
-                    "total": {"$sum": 1}
-                }},
-                {"$sort": {"_id": 1}},
-                {"$limit": 12}
-            ])
-            
-            df_evolucao = pd.DataFrame(list(evolucao))
-            if not df_evolucao.empty:
-                st.line_chart(df_evolucao.set_index('_id'))
+        except Exception as e:
+            st.error(f"Erro ao carregar clientes: {str(e)}")
+            st.button("Tentar novamente", key="reload_clientes")
+    
+    # Redirecionamento automático se necessário
+    if st.session_state.get('redirect_to_tab1', False):
+        st.session_state.redirect_to_tab1 = False
+        st.experimental_set_query_params(tab="📝 Cadastrar Novo Cliente")
+        st.rerun()
 # =============================================
 # MÓDULO DE PRODUTOS
 # =============================================
