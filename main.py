@@ -1,8 +1,8 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, time
+from datetime import datetime, date, time as dt_time
 import os
-import time
+import time as pytime
 from pymongo import MongoClient
 import certifi
 from bson.objectid import ObjectId
@@ -51,16 +51,17 @@ def get_database():
 
 def modulo_clientes(db):
     st.title("👥 Gestão de Clientes")
+
     clientes_col = db['clientes']
-    
+
     # Função para converter date para datetime (para o MongoDB)
     def date_to_datetime(date_obj):
-        return datetime.combine(date_obj, time.min)
-    
+        return datetime.combine(date_obj, dt_time.min)
+
     # Função para formatar exibição de datas
     def format_date(dt):
         return dt.strftime("%d/%m/%Y") if dt else "Não informado"
-    
+
     # Layout principal com abas
     tab1, tab2 = st.tabs(["📝 Cadastrar", "📋 Listar/Editar"])
 
@@ -69,45 +70,44 @@ def modulo_clientes(db):
         st.subheader("Cadastrar Novo Cliente")
         with st.form("form_cliente", clear_on_submit=True):
             col1, col2 = st.columns(2)
-            
+
             with col1:
                 nome = st.text_input("Nome Completo*", key="nome_cadastro")
                 data_nascimento = st.date_input(
                     "Data de Nascimento",
-                    min_value=datetime(1900, 1, 1).date(),
+                    min_value=date(1900, 1, 1),
                     max_value=datetime.now().date(),
                     format="DD/MM/YYYY"
                 )
-                cpf = st.text_input("CPF", 
-                                   help="Formato: 123.456.789-00",
-                                   max_chars=14,
-                                   key="cpf_cadastro")
-                
+                cpf = st.text_input("CPF",
+                                    help="Formato: 123.456.789-00",
+                                    max_chars=14,
+                                    key="cpf_cadastro")
+
             with col2:
-                celular = st.text_input("Celular*", 
-                                       max_chars=15,
-                                       help="Formato: (99) 99999-9999",
-                                       key="celular_cadastro")
-                email = st.text_input("E-mail", 
-                                     type="default",
-                                     help="exemplo@dominio.com",
-                                     key="email_cadastro")
-            
+                celular = st.text_input("Celular*",
+                                        max_chars=15,
+                                        help="Formato: (99) 99999-9999",
+                                        key="celular_cadastro")
+                email = st.text_input("E-mail",
+                                      type="default",
+                                      help="exemplo@dominio.com",
+                                      key="email_cadastro")
+
             endereco = st.text_area("Endereço Completo", key="endereco_cadastro")
             observacoes = st.text_area("Observações/Notas", key="obs_cadastro")
-            
+
             if st.form_submit_button("Salvar Cliente", type="primary"):
                 if not nome or not celular:
                     st.error("Campos obrigatórios (*) não preenchidos!")
                 else:
                     try:
-                        # Verifica se CPF já existe
                         if cpf:
                             existe = clientes_col.count_documents({"cpf": cpf}, limit=1)
                             if existe > 0:
                                 st.warning("Já existe um cliente cadastrado com este CPF")
                                 return
-                        
+
                         novo_cliente = {
                             "nome": nome,
                             "data_nascimento": date_to_datetime(data_nascimento),
@@ -123,11 +123,11 @@ def modulo_clientes(db):
                             "status": "ativo",
                             "tipo": "consumidor_final"
                         }
-                        
+
                         clientes_col.insert_one(novo_cliente)
                         st.success("Cliente cadastrado com sucesso!")
                         st.balloons()
-                        time.sleep(1)
+                        pytime.sleep(1)
                         st.rerun()
                     except Exception as e:
                         st.error(f"Erro ao cadastrar cliente: {str(e)}")
@@ -135,20 +135,16 @@ def modulo_clientes(db):
     # Aba de Listagem/Edição
     with tab2:
         st.subheader("Clientes Cadastrados")
-        
+
         try:
-            # Consulta todos os clientes ativos
             clientes = list(clientes_col.find({"status": "ativo"}).sort("nome", 1))
-            
+
             if not clientes:
                 st.info("Nenhum cliente cadastrado ainda.")
-                if st.button("Cadastrar Primeiro Cliente", 
-                            type="primary",
-                            key="btn_cadastrar_primeiro"):
+                if st.button("Cadastrar Primeiro Cliente", type="primary", key="btn_cadastrar_primeiro"):
                     st.session_state.redirect_to_tab1 = True
                     st.rerun()
             else:
-                # Preparação dos dados para exibição
                 dados = []
                 for cliente in clientes:
                     dados.append({
@@ -161,8 +157,7 @@ def modulo_clientes(db):
                         "Cadastro": format_date(cliente["data_cadastro"]),
                         "Tipo": "Consumidor" if cliente["tipo"] == "consumidor_final" else cliente["tipo"].capitalize()
                     })
-                
-                # Exibição em DataFrame
+
                 df = pd.DataFrame(dados)
                 st.dataframe(
                     df,
@@ -174,7 +169,7 @@ def modulo_clientes(db):
                         "Cadastro": st.column_config.DateColumn(format="DD/MM/YYYY")
                     }
                 )
-                
+
                 # Seção de Edição
                 st.subheader("Editar Cliente")
                 cliente_selecionado = st.selectbox(
@@ -183,38 +178,38 @@ def modulo_clientes(db):
                     format_func=lambda x: next(cliente["nome"] for cliente in clientes if cliente["_id"] == x),
                     key="select_editar"
                 )
-                
+
                 if cliente_selecionado:
                     cliente = clientes_col.find_one({"_id": cliente_selecionado})
                     with st.form("form_editar_cliente"):
                         col_e1, col_e2 = st.columns(2)
-                        
+
                         with col_e1:
                             novo_nome = st.text_input("Nome", value=cliente["nome"], key="nome_editar")
                             nova_data_nasc = st.date_input(
                                 "Data Nascimento",
                                 value=cliente["data_nascimento"].date(),
-                                min_value=datetime(1900, 1, 1).date(),
+                                min_value=date(1900, 1, 1),
                                 max_value=datetime.now().date(),
                                 format="DD/MM/YYYY",
                                 key="data_editar"
                             )
                             novo_cpf = st.text_input(
-                                "CPF", 
+                                "CPF",
                                 value=cliente.get("cpf", ""),
                                 max_chars=14,
                                 key="cpf_editar"
                             )
-                            
+
                         with col_e2:
                             novo_celular = st.text_input(
-                                "Celular", 
+                                "Celular",
                                 value=cliente["contato"]["celular"],
                                 max_chars=15,
                                 key="celular_editar"
                             )
                             novo_email = st.text_input(
-                                "E-mail", 
+                                "E-mail",
                                 value=cliente["contato"].get("email", ""),
                                 key="email_editar"
                             )
@@ -224,18 +219,10 @@ def modulo_clientes(db):
                                 index=["consumidor_final", "revendedor", "empresa"].index(cliente["tipo"]),
                                 key="tipo_editar"
                             )
-                        
-                        novo_endereco = st.text_area(
-                            "Endereço", 
-                            value=cliente.get("endereco", ""),
-                            key="endereco_editar"
-                        )
-                        novas_obs = st.text_area(
-                            "Observações", 
-                            value=cliente.get("observacoes", ""),
-                            key="obs_editar"
-                        )
-                        
+
+                        novo_endereco = st.text_area("Endereço", value=cliente.get("endereco", ""), key="endereco_editar")
+                        novas_obs = st.text_area("Observações", value=cliente.get("observacoes", ""), key="obs_editar")
+
                         if st.form_submit_button("Atualizar Cliente", type="primary"):
                             atualizacao = {
                                 "$set": {
@@ -252,9 +239,8 @@ def modulo_clientes(db):
                                     "ultima_atualizacao": datetime.now()
                                 }
                             }
-                            
+
                             try:
-                                # Verifica se CPF já existe para outro cliente
                                 if novo_cpf and novo_cpf != cliente.get("cpf", ""):
                                     existe = clientes_col.count_documents({
                                         "cpf": novo_cpf,
@@ -263,16 +249,13 @@ def modulo_clientes(db):
                                     if existe > 0:
                                         st.warning("CPF já cadastrado para outro cliente")
                                         return
-                                
-                                clientes_col.update_one(
-                                    {"_id": cliente_selecionado},
-                                    atualizacao
-                                )
+
+                                clientes_col.update_one({"_id": cliente_selecionado}, atualizacao)
                                 st.success("Cliente atualizado com sucesso!")
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Erro ao atualizar cliente: {str(e)}")
-                
+
                 # Seção de Exclusão (inativação)
                 st.subheader("Remover Cliente")
                 cliente_remover = st.selectbox(
@@ -281,7 +264,7 @@ def modulo_clientes(db):
                     format_func=lambda x: next(cliente["nome"] for cliente in clientes if cliente["_id"] == x),
                     key="select_remover"
                 )
-                
+
                 if cliente_remover and st.button("Confirmar Remoção", type="primary"):
                     try:
                         clientes_col.update_one(
@@ -292,12 +275,12 @@ def modulo_clientes(db):
                         st.rerun()
                     except Exception as e:
                         st.error(f"Erro ao remover cliente: {str(e)}")
-        
+
         except Exception as e:
             st.error(f"Erro ao carregar clientes: {str(e)}")
             st.button("Tentar novamente", key="reload_clientes")
-    
-    # Redirecionamento para a aba de cadastro se necessário
+
+    # Redirecionamento para aba de cadastro se necessário
     if st.session_state.get('redirect_to_tab1', False):
         st.session_state.redirect_to_tab1 = False
         st.experimental_set_query_params(tab="📝 Cadastrar")
