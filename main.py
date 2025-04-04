@@ -5,6 +5,7 @@ import time as pytime
 from pymongo import MongoClient
 import certifi
 from bson.objectid import ObjectId
+import hashlib
 import base64
 from io import BytesIO
 
@@ -27,10 +28,23 @@ def get_database():
         client.admin.command('ping')
         db = client.get_database()
         
-        required_collections = ['clientes', 'produtos', 'vendas', 'itens_venda', 'configuracoes']
+        required_collections = ['clientes', 'produtos', 'vendas', 'itens_venda', 'configuracoes', 'usuarios']
         for coll in required_collections:
             if coll not in db.list_collection_names():
                 db.create_collection(coll)
+                
+                # Cria usuário admin padrão se a coleção for nova
+                if coll == 'usuarios':
+                    db.usuarios.insert_one({
+                        "username": "admin",
+                        "password_hash": hashlib.sha256("admin123".encode()).hexdigest(),
+                        "nome": "Administrador",
+                        "email": "admin@sistema.com",
+                        "nivel_acesso": "admin",
+                        "data_criacao": datetime.now(),
+                        "ultimo_login": None,
+                        "ativo": True
+                    })
                 
         return db
         
@@ -40,11 +54,238 @@ def get_database():
         st.stop()
 
 # =============================================
+# SISTEMA DE AUTENTICAÇÃO
+# =============================================
+
+def inicializar_autenticacao():
+    if 'autenticado' not in st.session_state:
+        st.session_state.autenticado = False
+    if 'usuario_atual' not in st.session_state:
+        st.session_state.usuario_atual = None
+    if 'tentativas_login' not in st.session_state:
+        st.session_state.tentativas_login = 0
+    if 'pagina_atual' not in st.session_state:
+        st.session_state.pagina_atual = "menu"
+
+def verificar_credenciais(db, username, password):
+    usuario = db.usuarios.find_one({"username": username, "ativo": True})
+    if usuario:
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        if usuario['password_hash'] == password_hash:
+            return usuario
+    return None
+
+def pagina_login(db):
+    st.title("🔐 Login - Sistema de Vendas")
+    
+    with st.form("form_login"):
+        username = st.text_input("Usuário", placeholder="Digite seu nome de usuário")
+        password = st.text_input("Senha", placeholder="Digite sua senha", type="password")
+        
+        if st.form_submit_button("Entrar"):
+            if st.session_state.tentativas_login >= 3:
+                st.error("Número máximo de tentativas excedido. Tente novamente mais tarde.")
+                return
+            
+            usuario = verificar_credenciais(db, username, password)
+            if usuario:
+                st.session_state.autenticado = True
+                st.session_state.usuario_atual = usuario
+                st.session_state.tentativas_login = 0
+                st.session_state.pagina_atual = "menu"
+                
+                # Atualiza último login no banco de dados
+                db.usuarios.update_one(
+                    {"_id": usuario["_id"]},
+                    {"$set": {"ultimo_login": datetime.now()}}
+                )
+                
+                st.success(f"Bem-vindo, {usuario['nome']}!")
+                pytime.sleep(1)
+                st.rerun()
+            else:
+                st.session_state.tentativas_login += 1
+                st.error("Credenciais inválidas. Tente novamente.")
+    
+    if st.session_state.tentativas_login > 0:
+        st.warning(f"Tentativas restantes: {3 - st.session_state.tentativas_login}")
+
+def verificar_autenticacao(db):
+    if not st.session_state.autenticado:
+        pagina_login(db)
+        st.stop()
+
+# =============================================
+# FUNÇÃO DE ALTERAÇÃO DE SENHA
+# =============================================
+
+def alterar_senha(db):
+    verificar_autenticacao(db)
+    st.title("🔑 Alterar Senha")
+    
+    with st.form("form_alterar_senha", clear_on_submit=True):
+        senha_atual = st.text_input("Senha Atual", type="password")
+        nova_senha = st.text_input("Nova Senha", type="password", 
+                                 help="A senha deve ter pelo menos 6 caracteres")
+        confirmar_senha = st.text_input("Confirmar Nova Senha", type="password")
+        
+        if st.form_submit_button("Salvar Alterações", type="primary"):
+            # Verifica se a senha atual está correta
+            senha_atual_hash = hashlib.sha256(senha_atual.encode()).hexdigest()
+            if senha_atual_hash != st.session_state.usuario_atual["password_hash"]:
+                st.error("Senha atual incorreta!")
+                return
+            
+            # Valida a nova senha
+            if nova_senha != confirmar_senha:
+                st.error("As senhas não coincidem!")
+                return
+            
+            if len(nova_senha) < 6:
+                st.error("A senha deve ter pelo menos 6 caracteres!")
+                return
+            
+            # Atualiza a senha no banco de dados
+            nova_senha_hash = hashlib.sha256(nova_senha.encode()).hexdigest()
+            db.usuarios.update_one(
+                {"_id": st.session_state.usuario_atual["_id"]},
+                {"$set": {"password_hash": nova_senha_hash}}
+            )
+            
+            # Atualiza a sessão
+            st.session_state.usuario_atual["password_hash"] = nova_senha_hash
+            
+            st.success("Senha alterada com sucesso!")
+            st.balloons()
+            pytime.sleep(2)
+            st.session_state.pagina_atual = "menu"
+            st.rerun()
+    
+    if st.button("Voltar ao Menu"):
+        st.session_state.pagina_atual = "menu"
+        st.rerun()
+
+# =============================================
+# MÓDULO DE USUÁRIOS
+# =============================================
+
+def modulo_usuarios(db):
+    verificar_autenticacao(db)
+    
+    # Verificar se o usuário atual tem permissão para acessar este módulo
+    if st.session_state.usuario_atual['nivel_acesso'] not in ['admin', 'gerente']:
+        st.error("Você não tem permissão para acessar esta funcionalidade.")
+        return
+    
+    st.title("👨‍💼 Gestão de Usuários")
+    
+    tab1, tab2 = st.tabs(["📋 Lista de Usuários", "➕ Cadastrar Usuário"])
+    
+    with tab1:
+        st.subheader("Usuários Cadastrados")
+        
+        usuarios = list(db.usuarios.find().sort("nome", 1))
+        
+        if not usuarios:
+            st.info("Nenhum usuário cadastrado.")
+        else:
+            dados = []
+            for usuario in usuarios:
+                dados.append({
+                    "ID": str(usuario["_id"]),
+                    "Nome": usuario["nome"],
+                    "Usuário": usuario["username"],
+                    "E-mail": usuario.get("email", "-"),
+                    "Nível": usuario["nivel_acesso"].capitalize(),
+                    "Último Login": format_date(usuario.get("ultimo_login")),
+                    "Status": "Ativo" if usuario.get("ativo", False) else "Inativo",
+                    "Ações": "Manter"
+                })
+
+            df = pd.DataFrame(dados)
+            
+            edited_df = st.data_editor(
+                df,
+                column_config={
+                    "ID": st.column_config.Column(disabled=True),
+                    "Ações": st.column_config.SelectboxColumn(
+                        "Ações",
+                        options=["Manter", "Editar", "Inativar"],
+                        required=True
+                    )
+                },
+                hide_index=True,
+                use_container_width=True,
+                key="editor_usuarios"
+            )
+            
+            if not edited_df[edited_df['Ações'] == "Inativar"].empty:
+                st.warning("⚠️ Atenção: Esta ação desativará o acesso do usuário!")
+                if st.button("Confirmar Inativação", type="primary"):
+                    for idx, row in edited_df[edited_df['Ações'] == "Inativar"].iterrows():
+                        db.usuarios.update_one(
+                            {"_id": ObjectId(row['ID'])},
+                            {"$set": {"ativo": False}}
+                        )
+                    st.success("Usuários inativados com sucesso!")
+                    st.rerun()
+    
+    with tab2:
+        st.subheader("Cadastrar Novo Usuário")
+        with st.form("form_usuario", clear_on_submit=True, border=True):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                nome = st.text_input("Nome Completo*", placeholder="Nome completo do usuário")
+                username = st.text_input("Nome de Usuário*", placeholder="Nome para login")
+                
+            with col2:
+                email = st.text_input("E-mail", placeholder="usuario@empresa.com")
+                nivel_acesso = st.selectbox(
+                    "Nível de Acesso*",
+                    ["admin", "gerente", "operador"],
+                    index=2
+                )
+            
+            password = st.text_input("Senha*", placeholder="Digite uma senha forte", type="password")
+            confirm_password = st.text_input("Confirmar Senha*", placeholder="Repita a senha", type="password")
+            
+            if st.form_submit_button("Cadastrar Usuário", type="primary"):
+                if not nome or not username or not password or not confirm_password:
+                    st.error("Campos obrigatórios (*) não preenchidos!")
+                elif password != confirm_password:
+                    st.error("As senhas não coincidem!")
+                else:
+                    # Verifica se o username já existe
+                    if db.usuarios.count_documents({"username": username}, limit=1) > 0:
+                        st.error("Nome de usuário já está em uso!")
+                    else:
+                        try:
+                            novo_usuario = {
+                                "nome": nome,
+                                "username": username,
+                                "email": email if email else None,
+                                "password_hash": hashlib.sha256(password.encode()).hexdigest(),
+                                "nivel_acesso": nivel_acesso,
+                                "data_criacao": datetime.now(),
+                                "ultimo_login": None,
+                                "ativo": True
+                            }
+
+                            db.usuarios.insert_one(novo_usuario)
+                            st.success("Usuário cadastrado com sucesso!")
+                            st.balloons()
+                            pytime.sleep(1.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao cadastrar usuário: {str(e)}")
+
+# =============================================
 # FUNÇÕES AUXILIARES
 # =============================================
 
 def format_date(dt):
-    return dt.strftime("%d/%m/%Y") if dt else "Não informado"
+    return dt.strftime("%d/%m/%Y %H:%M") if dt else "Não informado"
 
 def format_currency(value):
     return f"R$ {value:,.2f}"
@@ -65,6 +306,7 @@ def generate_excel(df):
 # =============================================
 
 def modulo_clientes(db):
+    verificar_autenticacao(db)
     st.title("👥 Gestão de Clientes")
     clientes_col = db['clientes']
 
@@ -204,6 +446,7 @@ def modulo_clientes(db):
 # =============================================
 
 def modulo_produtos(db):
+    verificar_autenticacao(db)
     st.title("📦 Gestão de Produtos")
     produtos_col = db['produtos']
 
@@ -451,6 +694,7 @@ def modulo_produtos(db):
 # =============================================
 
 def modulo_vendas(db):
+    verificar_autenticacao(db)
     st.title("💰 Gestão de Vendas")
     
     vendas_col = db['vendas']
@@ -1102,6 +1346,7 @@ def modulo_vendas(db):
 # =============================================
 
 def modulo_relatorios(db):
+    verificar_autenticacao(db)
     st.title("📊 Relatórios Avançados")
     
     vendas_col = db['vendas']
@@ -1386,11 +1631,14 @@ def modulo_relatorios(db):
 
 def main():
     st.set_page_config(
-        page_title="Sari Dulces iGEST",
+        page_title="Sistema de Vendas",
         page_icon="🛒",
         layout="wide",
         initial_sidebar_state="expanded"
     )
+    
+    # Inicializa sistema de autenticação
+    inicializar_autenticacao()
     
     # Conexão com o banco de dados
     db = get_database()
@@ -1398,25 +1646,49 @@ def main():
         st.error("Não foi possível conectar ao banco de dados. Verifique sua conexão com a internet e as credenciais do MongoDB.")
         return
     
-    # Menu lateral
+    # Verifica autenticação antes de mostrar qualquer conteúdo
+    if not st.session_state.autenticado:
+        pagina_login(db)
+        st.stop()
+    
+    # Menu lateral (apenas para usuários autenticados)
     with st.sidebar:
-        st.title("🛒 Sari Dulces iGEST")
+        st.title("🛒 Sistema de Vendas")
+        st.markdown(f"**Usuário:** {st.session_state.usuario_atual['nome']}")
+        st.markdown(f"**Nível:** {st.session_state.usuario_atual['nivel_acesso'].capitalize()}")
         st.markdown("---")
+        
+        opcoes_menu = ["👥 Clientes", "📦 Produtos", "💰 Vendas", "📊 Relatórios"]
+        
+        # Adiciona gestão de usuários apenas para administradores
+        if st.session_state.usuario_atual['nivel_acesso'] in ['admin', 'gerente']:
+            opcoes_menu.append("👨‍💼 Usuários")
         
         menu = st.radio(
             "Menu Principal",
-            ["👥 Clientes", "📦 Produtos", "💰 Vendas", "📊 Relatórios"],
+            opcoes_menu,
             index=0
         )
         
         st.markdown("---")
-        st.markdown(f"**Data/Hora:** {datetime.now().strftime('%d/%m/%Y %H:%M')}")
         
-        if st.button("🔄 Atualizar Página", use_container_width=True):
+        # Botão para alterar senha
+        if st.button("🔑 Alterar Minha Senha", use_container_width=True):
+            st.session_state.pagina_atual = "alterar_senha"
             st.rerun()
+        
+        # Botão para sair
+        if st.button("🚪 Sair", use_container_width=True):
+            st.session_state.autenticado = False
+            st.session_state.usuario_atual = None
+            st.rerun()
+        
+        st.markdown(f"**Data/Hora:** {datetime.now().strftime('%d/%m/%Y %H:%M')}")
     
     # Navegação
-    if menu == "👥 Clientes":
+    if 'pagina_atual' in st.session_state and st.session_state.pagina_atual == "alterar_senha":
+        alterar_senha(db)
+    elif menu == "👥 Clientes":
         modulo_clientes(db)
     elif menu == "📦 Produtos":
         modulo_produtos(db)
@@ -1424,6 +1696,8 @@ def main():
         modulo_vendas(db)
     elif menu == "📊 Relatórios":
         modulo_relatorios(db)
+    elif menu == "👨‍💼 Usuários":
+        modulo_usuarios(db)
 
 if __name__ == "__main__":
     main()
