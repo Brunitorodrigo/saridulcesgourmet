@@ -347,9 +347,42 @@ def modulo_produtos(db):
     with tab2:
         st.subheader("Produtos Cadastrados")
         
-        # Filtros (código existente)
-        # ...
+        # Filtros
+        col_filtro1, col_filtro2, col_filtro3 = st.columns(3)
+        with col_filtro1:
+            filtro_categoria = st.selectbox(
+                "Filtrar por categoria",
+                ["Todas"] + list(produtos_col.distinct("categoria")),
+                index=0
+            )
+        with col_filtro2:
+            filtro_estoque = st.selectbox(
+                "Filtrar por estoque",
+                ["Todos", "Em estoque", "Estoque baixo", "Sem estoque"],
+                index=0
+            )
+        with col_filtro3:
+            filtro_ativo = st.selectbox(
+                "Status",
+                ["Ativos", "Inativos", "Todos"],
+                index=0
+            )
         
+        # Consulta com filtros
+        query = {}
+        if filtro_categoria != "Todas":
+            query["categoria"] = filtro_categoria
+        if filtro_estoque == "Em estoque":
+            query["estoque"] = {"$gt": 0}
+        elif filtro_estoque == "Estoque baixo":
+            query["estoque"] = {"$lt": 10, "$gt": 0}
+        elif filtro_estoque == "Sem estoque":
+            query["estoque"] = 0
+        if filtro_ativo == "Ativos":
+            query["ativo"] = True
+        elif filtro_ativo == "Inativos":
+            query["ativo"] = False
+
         produtos = list(produtos_col.find(query).sort("nome", 1))
         
         if produtos:
@@ -426,13 +459,15 @@ def modulo_produtos(db):
                         except Exception as e:
                             st.error(f"Erro ao excluir produtos: {str(e)}")
             
-            # Seção de Edição - VERSÃO CORRIGIDA
+            # Seção de Edição (Versão Corrigida)
             with st.expander("📝 Editar Produto", expanded=False):
-                # Lista de produtos disponíveis para edição (excluindo os marcados para exclusão)
+                # Lista de produtos disponíveis para edição
                 produtos_disponiveis_edicao = [
                     p["_id"] for p in produtos 
-                    if not any(str(p["_id"]) == row['ID'] 
-                    for _, row in edited_df[edited_df['Ações'] == "Excluir"].iterrows())
+                    if not any(
+                        str(p["_id"]) == row['ID'] 
+                    for _, row in edited_df[edited_df['Ações'] == "Excluir"].iterrows()
+                    )
                 ]
                 
                 produto_editar = st.selectbox(
@@ -469,7 +504,7 @@ def modulo_produtos(db):
                                 "Custo", 
                                 min_value=0.0, 
                                 step=0.01, 
-                                value=float(produto.get("custo_producao", 0))),
+                                value=float(produto.get("custo_producao", 0)),
                                 key=f"custo_{produto_editar}"
                             )
                             novo_status = st.checkbox(
