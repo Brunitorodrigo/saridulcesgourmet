@@ -919,35 +919,91 @@ def modulo_vendas(db):
                         cliente = clientes_col.find_one({"_id": ObjectId(venda["cliente_id"])})
                         dados_vendas.append({
                             "ID": str(venda["_id"]),
+                            "Cliente ID": venda["cliente_id"],  # Adicionado para operações de exclusão
                             "Data": venda["data_venda"].strftime("%d/%m/%Y %H:%M"),
                             "Cliente": cliente["nome"] if cliente else "Cliente não encontrado",
                             "Valor Total": venda["valor_total"],
                             "Status": venda["status"].capitalize(),
-                            "Itens": venda["itens_count"]
+                            "Itens": venda["itens_count"],
+                            "Ações": "Manter"  # Nova coluna para ações
                         })
                     except:
                         continue
                 
-                # Exibe tabela
+                # Cria DataFrame
                 df_vendas = pd.DataFrame(dados_vendas)
-                st.dataframe(
+                
+                # Editor com opção de apagar
+                edited_df = st.data_editor(
                     df_vendas,
                     column_config={
+                        "Ações": st.column_config.SelectboxColumn(
+                            "Ações",
+                            options=["Manter", "Apagar"],
+                            required=True
+                        ),
                         "Valor Total": st.column_config.NumberColumn(
-                            "Valor Total",
                             format="R$ %.2f"
-                        )
+                        ),
+                        "Cliente ID": None  # Oculta esta coluna na exibição
                     },
                     hide_index=True,
                     use_container_width=True,
-                    height=400
+                    height=400,
+                    key="editor_historico_vendas"
                 )
-                
+
+                # Processa vendas marcadas para apagar
+                if not edited_df[edited_df['Ações'] == "Apagar"].empty:
+                    st.warning("⚠️ Atenção: Esta ação não pode ser desfeita!")
+                    
+                    if st.button("Confirmar Exclusão", type="primary"):
+                        with st.spinner("Processando exclusão..."):
+                            try:
+                                for idx, row in edited_df[edited_df['Ações'] == "Apagar"].iterrows():
+                                    venda_id = row['ID']
+                                    
+                                    # 1. Recupera itens da venda
+                                    itens_venda = list(itens_col.find({"venda_id": venda_id}))
+                                    
+                                    # 2. Devolve ao estoque
+                                    for item in itens_venda:
+                                        produtos_col.update_one(
+                                            {"_id": ObjectId(item["produto_id"])},
+                                            {"$inc": {"estoque": item["quantidade"]}}
+                                        )
+                                    
+                                    # 3. Remove itens
+                                    itens_col.delete_many({"venda_id": venda_id})
+                                    
+                                    # 4. Atualiza cliente
+                                    valor_venda = vendas_col.find_one({"_id": ObjectId(venda_id)})["valor_total"]
+                                    clientes_col.update_one(
+                                        {"_id": ObjectId(row['Cliente ID'])},
+                                        {
+                                            "$inc": {
+                                                "compras_realizadas": -1,
+                                                "total_gasto": -valor_venda
+                                            }
+                                        }
+                                    )
+                                    
+                                    # 5. Remove venda principal
+                                    vendas_col.delete_one({"_id": ObjectId(venda_id)})
+                                
+                                st.success("Vendas excluídas com sucesso!")
+                                st.balloons()
+                                st.rerun()
+                            
+                            except Exception as e:
+                                st.error(f"Erro ao excluir: {str(e)}")
+                                st.error("Algumas operações podem não ter sido completadas.")
+
                 # Detalhes da venda selecionada
                 if len(dados_vendas) > 0:
                     venda_selecionada = st.selectbox(
                         "Selecione uma venda para detalhar",
-                        options=[v["ID"] for v in dados_vendas],
+                        options=[v["ID"] for v in dados_vendas if v["Ações"] == "Manter"],  # Filtra apenas vendas mantidas
                         format_func=lambda x: next(
                             f"{v['Data']} - {v['Cliente']} - R$ {v['Valor Total']:.2f}" 
                             for v in dados_vendas 
