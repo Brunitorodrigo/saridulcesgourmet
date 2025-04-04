@@ -1,36 +1,33 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, date, timedelta, time as dt_time
-import os
+from datetime import datetime, date, timedelta
 import time as pytime
 from pymongo import MongoClient
 import certifi
 from bson.objectid import ObjectId
+import base64
+from io import BytesIO
 
 # =============================================
 # CONFIGURAÇÃO DO MONGODB ATLAS
 # =============================================
 
-# Configuração da conexão (substitua pela sua URI do MongoDB Atlas)
 MONGO_URI = 'mongodb+srv://brunorodrigo:123Putao@cluster0.lrr3cgd.mongodb.net/saridulces?retryWrites=true&w=majority'
 
-# Conexão segura com o MongoDB Atlas
 def get_database():
     try:
         client = MongoClient(
             MONGO_URI,
             tlsCAFile=certifi.where(),
-            serverSelectionTimeoutMS=5000,  # Timeout de 5 segundos
-            connectTimeoutMS=30000,  # Timeout de conexão de 30 segundos
-            socketTimeoutMS=30000  # Timeout de socket de 30 segundos
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=30000,
+            socketTimeoutMS=30000
         )
         
-        # Testa a conexão
         client.admin.command('ping')
         db = client.get_database()
         
-        # Verifica se as coleções existem
-        required_collections = ['clientes', 'produtos', 'vendas', 'itens_venda']
+        required_collections = ['clientes', 'produtos', 'vendas', 'itens_venda', 'configuracoes']
         for coll in required_collections:
             if coll not in db.list_collection_names():
                 db.create_collection(coll)
@@ -39,11 +36,29 @@ def get_database():
         
     except Exception as e:
         st.error(f"Falha na conexão com o MongoDB: {str(e)}")
-        st.error("Verifique:")
-        st.error("1. Sua conexão com a internet")
-        st.error("2. As credenciais do MongoDB Atlas")
-        st.error("3. Se o cluster está ativo")
+        st.error("Verifique sua conexão com a internet e as credenciais.")
         st.stop()
+
+# =============================================
+# FUNÇÕES AUXILIARES
+# =============================================
+
+def format_date(dt):
+    return dt.strftime("%d/%m/%Y") if dt else "Não informado"
+
+def format_currency(value):
+    return f"R$ {value:,.2f}"
+
+def date_to_datetime(date_obj):
+    return datetime.combine(date_obj, datetime.min.time())
+
+def generate_excel(df):
+    output = BytesIO()
+    writer = pd.ExcelWriter(output, engine='xlsxwriter')
+    df.to_excel(writer, index=False, sheet_name='Relatorio')
+    writer.close()
+    processed_data = output.getvalue()
+    return processed_data
 
 # =============================================
 # MÓDULO DE CLIENTES
@@ -51,63 +66,42 @@ def get_database():
 
 def modulo_clientes(db):
     st.title("👥 Gestão de Clientes")
-
     clientes_col = db['clientes']
 
-    # Função para converter date para datetime (para o MongoDB)
-    def date_to_datetime(date_obj):
-        return datetime.combine(date_obj, dt_time.min)
+    tab1, tab2 = st.tabs(["📝 Cadastrar Cliente", "📋 Lista de Clientes"])
 
-    # Função para formatar exibição de datas
-    def format_date(dt):
-        return dt.strftime("%d/%m/%Y") if dt else "Não informado"
-
-    # Layout principal com abas
-    tab1, tab2 = st.tabs(["📝 Cadastrar", "📋 Listar/Editar"])
-
-    # Aba de Cadastro
     with tab1:
-        st.subheader("Cadastrar Novo Cliente")
-        with st.form("form_cliente", clear_on_submit=True):
+        st.subheader("Cadastro de Novo Cliente")
+        with st.form("form_cliente", clear_on_submit=True, border=True):
             col1, col2 = st.columns(2)
-
+            
             with col1:
-                nome = st.text_input("Nome Completo*", key="nome_cadastro")
+                nome = st.text_input("Nome Completo*", placeholder="Nome completo do cliente")
                 data_nascimento = st.date_input(
                     "Data de Nascimento",
                     min_value=date(1900, 1, 1),
                     max_value=datetime.now().date(),
                     format="DD/MM/YYYY"
                 )
-                cpf = st.text_input("CPF",
-                                    help="Formato: 123.456.789-00",
-                                    max_chars=14,
-                                    key="cpf_cadastro")
-
+                cpf = st.text_input("CPF", placeholder="000.000.000-00", max_chars=14)
+                
             with col2:
-                celular = st.text_input("Celular*",
-                                        max_chars=15,
-                                        help="Formato: (99) 99999-9999",
-                                        key="celular_cadastro")
-                email = st.text_input("E-mail",
-                                      type="default",
-                                      help="exemplo@dominio.com",
-                                      key="email_cadastro")
-
-            endereco = st.text_area("Endereço Completo", key="endereco_cadastro")
-            observacoes = st.text_area("Observações/Notas", key="obs_cadastro")
-
+                celular = st.text_input("Celular*", placeholder="(00) 00000-0000", max_chars=15)
+                email = st.text_input("E-mail", placeholder="cliente@exemplo.com")
+                tipo_cliente = st.selectbox(
+                    "Tipo de Cliente",
+                    ["Consumidor Final", "Revendedor", "Empresa"],
+                    index=0
+                )
+            
+            endereco = st.text_area("Endereço Completo")
+            observacoes = st.text_area("Observações/Notas")
+            
             if st.form_submit_button("Salvar Cliente", type="primary"):
                 if not nome or not celular:
                     st.error("Campos obrigatórios (*) não preenchidos!")
                 else:
                     try:
-                        if cpf:
-                            existe = clientes_col.count_documents({"cpf": cpf}, limit=1)
-                            if existe > 0:
-                                st.warning("Já existe um cliente cadastrado com este CPF")
-                                return
-
                         novo_cliente = {
                             "nome": nome,
                             "data_nascimento": date_to_datetime(data_nascimento),
@@ -121,182 +115,188 @@ def modulo_clientes(db):
                             "data_cadastro": datetime.now(),
                             "ultima_atualizacao": datetime.now(),
                             "status": "ativo",
-                            "tipo": "consumidor_final"
+                            "tipo": tipo_cliente.lower().replace(" ", "_"),
+                            "compras_realizadas": 0,
+                            "total_gasto": 0.0
                         }
 
                         clientes_col.insert_one(novo_cliente)
                         st.success("Cliente cadastrado com sucesso!")
                         st.balloons()
-                        pytime.sleep(1)
+                        pytime.sleep(1.5)
                         st.rerun()
                     except Exception as e:
                         st.error(f"Erro ao cadastrar cliente: {str(e)}")
 
-    # Aba de Listagem/Edição
     with tab2:
         st.subheader("Clientes Cadastrados")
-
-        try:
-            clientes = list(clientes_col.find({"status": "ativo"}).sort("nome", 1))
-
-            if not clientes:
-                st.info("Nenhum cliente cadastrado ainda.")
-                if st.button("Cadastrar Primeiro Cliente", type="primary", key="btn_cadastrar_primeiro"):
-                    st.session_state.redirect_to_tab1 = True
-                    st.rerun()
-            else:
-                dados = []
-                for cliente in clientes:
-                    dados.append({
-                        "ID": str(cliente["_id"]),
-                        "Nome": cliente["nome"],
-                        "Nascimento": format_date(cliente["data_nascimento"]),
-                        "CPF": cliente.get("cpf", "Não informado"),
-                        "Celular": cliente["contato"]["celular"],
-                        "E-mail": cliente["contato"].get("email", "Não informado"),
-                        "Cadastro": format_date(cliente["data_cadastro"]),
-                        "Tipo": "Consumidor" if cliente["tipo"] == "consumidor_final" else cliente["tipo"].capitalize()
-                    })
-
-                df = pd.DataFrame(dados)
-                st.dataframe(
-                    df,
-                    hide_index=True,
-                    use_container_width=True,
-                    column_config={
-                        "ID": st.column_config.Column(disabled=True),
-                        "Nascimento": st.column_config.DateColumn(format="DD/MM/YYYY"),
-                        "Cadastro": st.column_config.DateColumn(format="DD/MM/YYYY")
-                    }
+        
+        with st.expander("🔍 Filtros", expanded=True):
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                filtro_nome = st.text_input("Buscar por nome")
+            with col_f2:
+                filtro_status = st.selectbox(
+                    "Status",
+                    ["Ativos", "Inativos", "Todos"],
+                    index=0
                 )
+        
+        query = {}
+        if filtro_nome:
+            query["nome"] = {"$regex": filtro_nome, "$options": "i"}
+        if filtro_status != "Todos":
+            query["status"] = "ativo" if filtro_status == "Ativos" else "inativo"
+            
+        clientes = list(clientes_col.find(query).sort("nome", 1))
+        
+        if not clientes:
+            st.info("Nenhum cliente encontrado com os critérios selecionados.")
+            if st.button("Cadastrar Novo Cliente", type="primary"):
+                st.session_state.redirect_to_tab1 = True
+                st.rerun()
+        else:
+            dados = []
+            for cliente in clientes:
+                dados.append({
+                    "ID": str(cliente["_id"]),
+                    "Nome": cliente["nome"],
+                    "Celular": cliente["contato"]["celular"],
+                    "E-mail": cliente["contato"].get("email", "-"),
+                    "Tipo": cliente["tipo"].replace("_", " ").title(),
+                    "Status": "Ativo" if cliente["status"] == "ativo" else "Inativo",
+                    "Compras": cliente.get("compras_realizadas", 0),
+                    "Total Gasto": cliente.get("total_gasto", 0),
+                    "Ações": "Manter"
+                })
 
-                # Seção de Edição
-                st.subheader("Editar Cliente")
-                cliente_selecionado = st.selectbox(
-                    "Selecione o cliente para editar",
-                    options=[cliente["_id"] for cliente in clientes],
-                    format_func=lambda x: next(cliente["nome"] for cliente in clientes if cliente["_id"] == x),
-                    key="select_editar"
-                )
-
-                if cliente_selecionado:
-                    cliente = clientes_col.find_one({"_id": cliente_selecionado})
-                    with st.form("form_editar_cliente"):
-                        col_e1, col_e2 = st.columns(2)
-
-                        with col_e1:
-                            novo_nome = st.text_input("Nome", value=cliente["nome"], key="nome_editar")
-                            nova_data_nasc = st.date_input(
-                                "Data Nascimento",
-                                value=cliente["data_nascimento"].date(),
-                                min_value=date(1900, 1, 1),
-                                max_value=datetime.now().date(),
-                                format="DD/MM/YYYY",
-                                key="data_editar"
-                            )
-                            novo_cpf = st.text_input(
-                                "CPF",
-                                value=cliente.get("cpf", ""),
-                                max_chars=14,
-                                key="cpf_editar"
-                            )
-
-                        with col_e2:
-                            novo_celular = st.text_input(
-                                "Celular",
-                                value=cliente["contato"]["celular"],
-                                max_chars=15,
-                                key="celular_editar"
-                            )
-                            novo_email = st.text_input(
-                                "E-mail",
-                                value=cliente["contato"].get("email", ""),
-                                key="email_editar"
-                            )
-                            novo_tipo = st.selectbox(
-                                "Tipo de cliente",
-                                ["consumidor_final", "revendedor", "empresa"],
-                                index=["consumidor_final", "revendedor", "empresa"].index(cliente["tipo"]),
-                                key="tipo_editar"
-                            )
-
-                        novo_endereco = st.text_area("Endereço", value=cliente.get("endereco", ""), key="endereco_editar")
-                        novas_obs = st.text_area("Observações", value=cliente.get("observacoes", ""), key="obs_editar")
-
-                        if st.form_submit_button("Atualizar Cliente", type="primary"):
-                            atualizacao = {
-                                "$set": {
-                                    "nome": novo_nome,
-                                    "data_nascimento": date_to_datetime(nova_data_nasc),
-                                    "cpf": novo_cpf if novo_cpf else None,
-                                    "contato": {
-                                        "celular": novo_celular,
-                                        "email": novo_email if novo_email else None
-                                    },
-                                    "endereco": novo_endereco if novo_endereco else None,
-                                    "observacoes": novas_obs if novas_obs else None,
-                                    "tipo": novo_tipo,
-                                    "ultima_atualizacao": datetime.now()
-                                }
-                            }
-
-                            try:
-                                if novo_cpf and novo_cpf != cliente.get("cpf", ""):
-                                    existe = clientes_col.count_documents({
-                                        "cpf": novo_cpf,
-                                        "_id": {"$ne": cliente_selecionado}
-                                    }, limit=1)
-                                    if existe > 0:
-                                        st.warning("CPF já cadastrado para outro cliente")
-                                        return
-
-                                clientes_col.update_one({"_id": cliente_selecionado}, atualizacao)
-                                st.success("Cliente atualizado com sucesso!")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Erro ao atualizar cliente: {str(e)}")
-
-                # Seção de Exclusão (inativação)
-                st.subheader("Remover Cliente")
-                cliente_remover = st.selectbox(
-                    "Selecione o cliente para remover",
-                    options=[cliente["_id"] for cliente in clientes],
-                    format_func=lambda x: next(cliente["nome"] for cliente in clientes if cliente["_id"] == x),
-                    key="select_remover"
-                )
-
-                if cliente_remover and st.button("Confirmar Remoção", type="primary"):
-                    try:
+            df = pd.DataFrame(dados)
+            
+            edited_df = st.data_editor(
+                df,
+                column_config={
+                    "ID": st.column_config.Column(disabled=True),
+                    "Total Gasto": st.column_config.NumberColumn(format="R$ %.2f"),
+                    "Ações": st.column_config.SelectboxColumn(
+                        "Ações",
+                        options=["Manter", "Editar", "Inativar"],
+                        required=True
+                    )
+                },
+                hide_index=True,
+                use_container_width=True,
+                key="editor_clientes"
+            )
+            
+            if not edited_df[edited_df['Ações'] == "Inativar"].empty:
+                st.warning("⚠️ Atenção: Esta ação marcará o cliente como inativo!")
+                if st.button("Confirmar Inativação", type="primary"):
+                    for idx, row in edited_df[edited_df['Ações'] == "Inativar"].iterrows():
                         clientes_col.update_one(
-                            {"_id": cliente_remover},
+                            {"_id": ObjectId(row['ID'])},
                             {"$set": {"status": "inativo"}}
                         )
-                        st.success("Cliente marcado como inativo!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Erro ao remover cliente: {str(e)}")
+                    st.success("Clientes inativados com sucesso!")
+                    st.rerun()
 
-        except Exception as e:
-            st.error(f"Erro ao carregar clientes: {str(e)}")
-            st.button("Tentar novamente", key="reload_clientes")
-
-    # Redirecionamento para aba de cadastro se necessário
-    if st.session_state.get('redirect_to_tab1', False):
-        st.session_state.redirect_to_tab1 = False
-        st.experimental_set_query_params(tab="📝 Cadastrar")
-        st.rerun()
 # =============================================
 # MÓDULO DE PRODUTOS
 # =============================================
+
 def modulo_produtos(db):
     st.title("📦 Gestão de Produtos")
     produtos_col = db['produtos']
 
-    tab1, tab2, tab3 = st.tabs(["Cadastrar", "Listar/Editar", "Gerenciar Estoque"])
+    tab1, tab2, tab3 = st.tabs(["📋 Lista de Produtos", "➕ Cadastrar Produto", "📊 Estoque"])
 
     with tab1:
+        st.subheader("Produtos Cadastrados")
+        
+        with st.expander("🔍 Filtros", expanded=True):
+            col_f1, col_f2, col_f3 = st.columns(3)
+            with col_f1:
+                filtro_nome = st.text_input("Buscar por nome")
+            with col_f2:
+                filtro_categoria = st.selectbox(
+                    "Categoria",
+                    ["Todas"] + list(produtos_col.distinct("categoria")),
+                    index=0
+                )
+            with col_f3:
+                filtro_estoque = st.selectbox(
+                    "Estoque",
+                    ["Todos", "Disponível", "Estoque Baixo", "Esgotado"],
+                    index=0
+                )
+        
+        query = {}
+        if filtro_nome:
+            query["nome"] = {"$regex": filtro_nome, "$options": "i"}
+        if filtro_categoria != "Todas":
+            query["categoria"] = filtro_categoria
+        if filtro_estoque == "Disponível":
+            query["estoque"] = {"$gt": 0}
+        elif filtro_estoque == "Estoque Baixo":
+            query["estoque"] = {"$gt": 0, "$lt": 10}
+        elif filtro_estoque == "Esgotado":
+            query["estoque"] = 0
+            
+        produtos = list(produtos_col.find(query).sort("nome", 1))
+        
+        if not produtos:
+            st.info("Nenhum produto encontrado com os filtros selecionados.")
+        else:
+            dados = []
+            for produto in produtos:
+                dados.append({
+                    "ID": str(produto["_id"]),
+                    "Nome": produto["nome"],
+                    "Código": produto.get("codigo", "-"),
+                    "Categoria": produto["categoria"],
+                    "Preço": produto["preco_venda"],
+                    "Estoque": produto["estoque"],
+                    "Status": "Ativo" if produto.get("ativo", False) else "Inativo",
+                    "Ações": "Manter"
+                })
+
+            df = pd.DataFrame(dados)
+            
+            edited_df = st.data_editor(
+                df,
+                column_config={
+                    "ID": st.column_config.Column(disabled=True),
+                    "Preço": st.column_config.NumberColumn(format="R$ %.2f"),
+                    "Estoque": st.column_config.ProgressColumn(
+                        "Estoque",
+                        format="%d",
+                        min_value=0,
+                        max_value=100
+                    ),
+                    "Ações": st.column_config.SelectboxColumn(
+                        "Ações",
+                        options=["Manter", "Editar", "Inativar"],
+                        required=True
+                    )
+                },
+                hide_index=True,
+                use_container_width=True,
+                key="editor_produtos"
+            )
+            
+            if not edited_df[edited_df['Ações'] == "Inativar"].empty:
+                st.warning("⚠️ Atenção: Esta ação marcará o produto como inativo!")
+                if st.button("Confirmar Inativação", type="primary"):
+                    for idx, row in edited_df[edited_df['Ações'] == "Inativar"].iterrows():
+                        produtos_col.update_one(
+                            {"_id": ObjectId(row['ID'])},
+                            {"$set": {"ativo": False}}
+                        )
+                    st.success("Produtos inativados com sucesso!")
+                    st.rerun()
+
+    with tab2:
         st.subheader("Cadastro de Produto")
-        with st.form("form_produto", clear_on_submit=True):
+        with st.form("form_produto", clear_on_submit=True, border=True):
             col1, col2 = st.columns(2)
             
             with col1:
@@ -316,247 +316,42 @@ def modulo_produtos(db):
             descricao = st.text_area("Descrição do Produto", height=100)
             ingredientes = st.text_area("Ingredientes/Composição")
             
-            imagem = st.file_uploader("Imagem do Produto", type=["jpg", "png", "jpeg"])
-            
-            if st.form_submit_button("Cadastrar Produto"):
-                if not nome or not categoria:
-                    st.error("Campos obrigatórios (*) não preenchidos!")
+            if st.form_submit_button("Cadastrar Produto", type="primary"):
+                if not nome or not categoria or preco_venda <= 0:
+                    st.error("Campos obrigatórios (*) não preenchidos corretamente!")
                 else:
-                    novo_produto = {
-                        "nome": nome,
-                        "codigo": codigo if codigo else None,
-                        "categoria": categoria,
-                        "descricao": descricao,
-                        "ingredientes": ingredientes,
-                        "preco_venda": float(preco_venda),
-                        "custo_producao": float(custo_producao),
-                        "estoque": int(estoque_inicial),
-                        "data_cadastro": datetime.now(),
-                        "ultima_atualizacao": datetime.now(),
-                        "ativo": True,
-                        "destaque": False
-                    }
-                    
                     try:
-                        result = produtos_col.insert_one(novo_produto)
-                        st.success(f"Produto cadastrado com sucesso! ID: {result.inserted_id}")
+                        novo_produto = {
+                            "nome": nome,
+                            "codigo": codigo if codigo else None,
+                            "categoria": categoria,
+                            "descricao": descricao,
+                            "ingredientes": ingredientes,
+                            "preco_venda": float(preco_venda),
+                            "custo_producao": float(custo_producao),
+                            "estoque": int(estoque_inicial),
+                            "data_cadastro": datetime.now(),
+                            "ultima_atualizacao": datetime.now(),
+                            "ativo": True,
+                            "destaque": False
+                        }
+                        
+                        produtos_col.insert_one(novo_produto)
+                        st.success("Produto cadastrado com sucesso!")
                         st.balloons()
+                        pytime.sleep(1.5)
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Erro ao cadastrar produto: {str(e)}")
-
-    with tab2:
-        st.subheader("Produtos Cadastrados")
-        
-        # Filtros
-        col_filtro1, col_filtro2, col_filtro3 = st.columns(3)
-        with col_filtro1:
-            filtro_categoria = st.selectbox(
-                "Filtrar por categoria",
-                ["Todas"] + list(produtos_col.distinct("categoria")),
-                index=0
-            )
-        with col_filtro2:
-            filtro_estoque = st.selectbox(
-                "Filtrar por estoque",
-                ["Todos", "Em estoque", "Estoque baixo", "Sem estoque"],
-                index=0
-            )
-        with col_filtro3:
-            filtro_ativo = st.selectbox(
-                "Status",
-                ["Ativos", "Inativos", "Todos"],
-                index=0
-            )
-        
-        # Consulta com filtros
-        query = {}
-        if filtro_categoria != "Todas":
-            query["categoria"] = filtro_categoria
-        if filtro_estoque == "Em estoque":
-            query["estoque"] = {"$gt": 0}
-        elif filtro_estoque == "Estoque baixo":
-            query["estoque"] = {"$lt": 10, "$gt": 0}
-        elif filtro_estoque == "Sem estoque":
-            query["estoque"] = 0
-        if filtro_ativo == "Ativos":
-            query["ativo"] = True
-        elif filtro_ativo == "Inativos":
-            query["ativo"] = False
-
-        produtos = list(produtos_col.find(query).sort("nome", 1))
-        
-        if produtos:
-            # Preparação dos dados para exibição
-            dados = []
-            for p in produtos:
-                dados.append({
-                    "ID": str(p["_id"]),
-                    "Nome": p["nome"],
-                    "Código": p.get("codigo", "-"),
-                    "Categoria": p["categoria"],
-                    "Preço": p["preco_venda"],
-                    "Custo": p.get("custo_producao", 0),
-                    "Estoque": p["estoque"],
-                    "Status": "Ativo" if p.get("ativo", False) else "Inativo",
-                    "Ações": "Manter"
-                })
-            
-            df = pd.DataFrame(dados)
-            
-            # Estilo condicional para estoque
-            def estilo_linha(row):
-                estilo = []
-                if row['Estoque'] == 0:
-                    estilo.append('color: red')
-                elif row['Estoque'] < 10:
-                    estilo.append('color: orange')
-                else:
-                    estilo.append('color: green')
-                return estilo * len(row)
-            
-            # Editor de dados com opção de exclusão
-            edited_df = st.data_editor(
-                df.style.apply(estilo_linha, axis=1),
-                column_config={
-                    "ID": st.column_config.Column(disabled=True),
-                    "Preço": st.column_config.NumberColumn(format="R$ %.2f"),
-                    "Custo": st.column_config.NumberColumn(format="R$ %.2f"),
-                    "Ações": st.column_config.SelectboxColumn(
-                        "Ações",
-                        options=["Manter", "Excluir"],
-                        required=True
-                    )
-                },
-                hide_index=True,
-                use_container_width=True,
-                key="editor_produtos"
-            )
-            
-            # Processa produtos marcados para exclusão
-            if not edited_df[edited_df['Ações'] == "Excluir"].empty:
-                st.warning("⚠️ Atenção: Esta ação não pode ser desfeita!")
-                
-                if st.button("Confirmar Exclusão", type="primary"):
-                    with st.spinner("Excluindo produtos..."):
-                        try:
-                            for idx, row in edited_df[edited_df['Ações'] == "Excluir"].iterrows():
-                                produto_id = row['ID']
-                                
-                                # Verifica se o produto está em alguma venda
-                                vendas_com_produto = db['itens_venda'].count_documents({"produto_id": produto_id})
-                                
-                                if vendas_com_produto > 0:
-                                    st.error(f"O produto {row['Nome']} está associado a {vendas_com_produto} venda(s) e não pode ser excluído!")
-                                    continue
-                                
-                                # Exclusão física do produto
-                                produtos_col.delete_one({"_id": ObjectId(produto_id)})
-                            
-                            st.success("Produtos excluídos com sucesso!")
-                            st.balloons()
-                            st.rerun()
-                        
-                        except Exception as e:
-                            st.error(f"Erro ao excluir produtos: {str(e)}")
-            
-            # Seção de Edição (Versão Corrigida)
-            with st.expander("📝 Editar Produto", expanded=False):
-                # Lista de produtos disponíveis para edição
-                produtos_disponiveis_edicao = [
-                    p["_id"] for p in produtos 
-                    if not any(
-                        str(p["_id"]) == row['ID'] 
-                    for _, row in edited_df[edited_df['Ações'] == "Excluir"].iterrows()
-                    )
-                ]
-                
-                produto_editar = st.selectbox(
-                    "Selecione o produto para editar",
-                    options=produtos_disponiveis_edicao,
-                    format_func=lambda x: next(p["nome"] for p in produtos if p["_id"] == x),
-                    key="select_editar_produto"
-                )
-                
-                if produto_editar:
-                    produto = produtos_col.find_one({"_id": produto_editar})
-                    with st.form(f"form_editar_{produto_editar}"):
-                        col_e1, col_e2 = st.columns(2)
-                        
-                        with col_e1:
-                            novo_nome = st.text_input("Nome", value=produto["nome"], key=f"nome_{produto_editar}")
-                            novo_codigo = st.text_input("Código", value=produto.get("codigo", ""), key=f"codigo_{produto_editar}")
-                            nova_categoria = st.selectbox(
-                                "Categoria",
-                                ["Doce", "Salgado", "Bebida", "Outros"],
-                                index=["Doce", "Salgado", "Bebida", "Outros"].index(produto["categoria"]),
-                                key=f"categoria_{produto_editar}"
-                            )
-                            
-                        with col_e2:
-                            novo_preco = st.number_input(
-                                "Preço", 
-                                min_value=0.01, 
-                                step=0.01, 
-                                value=float(produto["preco_venda"]),
-                                key=f"preco_{produto_editar}"
-                            )
-                            novo_custo = st.number_input(
-                                "Custo", 
-                                min_value=0.0, 
-                                step=0.01, 
-                                value=float(produto.get("custo_producao", 0)),
-                                key=f"custo_{produto_editar}"
-                            )
-                            novo_status = st.checkbox(
-                                "Ativo", 
-                                value=produto.get("ativo", True),
-                                key=f"status_{produto_editar}"
-                            )
-                        
-                        nova_descricao = st.text_area(
-                            "Descrição", 
-                            value=produto.get("descricao", ""),
-                            key=f"descricao_{produto_editar}"
-                        )
-                        novos_ingredientes = st.text_area(
-                            "Ingredientes", 
-                            value=produto.get("ingredientes", ""),
-                            key=f"ingredientes_{produto_editar}"
-                        )
-                        
-                        if st.form_submit_button("Atualizar Produto"):
-                            atualizacao = {
-                                "$set": {
-                                    "nome": novo_nome,
-                                    "codigo": novo_codigo if novo_codigo else None,
-                                    "categoria": nova_categoria,
-                                    "descricao": nova_descricao,
-                                    "ingredientes": novos_ingredientes,
-                                    "preco_venda": novo_preco,
-                                    "custo_producao": novo_custo,
-                                    "ativo": novo_status,
-                                    "ultima_atualizacao": datetime.now()
-                                }
-                            }
-                            
-                            try:
-                                produtos_col.update_one(
-                                    {"_id": produto_editar},
-                                    atualizacao
-                                )
-                                st.success("Produto atualizado com sucesso!")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Erro ao atualizar produto: {str(e)}")
-        else:
-            st.info("Nenhum produto encontrado com os filtros selecionados.")
 
     with tab3:
         st.subheader("Gerenciamento de Estoque")
         
         produtos_estoque = list(produtos_col.find({"ativo": True}).sort("nome", 1))
         
-        if produtos_estoque:
+        if not produtos_estoque:
+            st.info("Nenhum produto ativo disponível para gerenciamento de estoque.")
+        else:
             produto_selecionado = st.selectbox(
                 "Selecione o produto",
                 [p["_id"] for p in produtos_estoque],
@@ -576,8 +371,7 @@ def modulo_produtos(db):
                             "Quantidade de entrada", 
                             min_value=1, 
                             step=1, 
-                            value=1,
-                            key="entrada"
+                            value=1
                         )
                         motivo_entrada = st.text_input("Motivo da entrada (opcional)")
                         
@@ -608,8 +402,7 @@ def modulo_produtos(db):
                             min_value=1, 
                             step=1, 
                             max_value=produto["estoque"],
-                            value=1,
-                            key="saida"
+                            value=1
                         )
                         motivo_saida = st.text_input("Motivo da saída (opcional)")
                         
@@ -633,14 +426,13 @@ def modulo_produtos(db):
                             st.success(f"Saída de {saida} unidades registrada. Novo estoque: {novo_estoque}")
                             st.rerun()
                 
-                # Histórico de movimentações
                 if "movimentacoes" in produto and produto["movimentacoes"]:
                     st.subheader("Histórico de Movimentações")
                     historico = sorted(
                         produto["movimentacoes"], 
                         key=lambda x: x["data"], 
                         reverse=True
-                    )[:20]  # Limita às últimas 20 movimentações
+                    )[:20]
                     
                     for mov in historico:
                         cor = "green" if mov["tipo"] == "entrada" else "red"
@@ -653,75 +445,59 @@ def modulo_produtos(db):
                             """,
                             unsafe_allow_html=True
                         )
-        else:
-            st.info("Nenhum produto ativo disponível para gerenciamento de estoque.")
+
 # =============================================
 # MÓDULO DE VENDAS
 # =============================================
+
 def modulo_vendas(db):
     st.title("💰 Gestão de Vendas")
     
-    # Verificação inicial da conexão com o banco
-    if db is None:
-        st.error("Falha na conexão com o banco de dados. Verifique sua conexão e tente novamente.")
-        return
+    vendas_col = db['vendas']
+    itens_col = db['itens_venda']
+    clientes_col = db['clientes']
+    produtos_col = db['produtos']
 
-    try:
-        # Acessa as coleções necessárias
-        vendas_col = db['vendas']
-        itens_col = db['itens_venda']
-        clientes_col = db['clientes']
-        produtos_col = db['produtos']
-    except Exception as e:
-        st.error(f"Erro ao acessar as coleções do banco: {str(e)}")
-        return
+    tab1, tab2, tab3 = st.tabs(["🛒 Nova Venda", "📜 Histórico", "📊 Relatórios"])
 
-    # Abas principais
-    tab1, tab2, tab3, tab4 = st.tabs(["Nova Venda", "Histórico", "Relatórios", "Editar Venda"])
-
-    # =============================================
-    # ABA: NOVA VENDA
-    # =============================================
     with tab1:
         st.subheader("Registrar Nova Venda")
         
         # Seção 1: Seleção do Cliente
-        try:
-            clientes_ativos = list(clientes_col.find({"status": "ativo"}).sort("nome", 1))
+        clientes_ativos = list(clientes_col.find({"status": "ativo"}).sort("nome", 1))
+        
+        if not clientes_ativos:
+            st.warning("Nenhum cliente cadastrado. Cadastre clientes antes de registrar vendas!")
+            if st.button("Ir para Cadastro de Clientes ➡️"):
+                st.session_state.menu = "Clientes"
+                st.rerun()
+            st.stop()
             
-            if not clientes_ativos:
-                st.warning("Nenhum cliente cadastrado. Cadastre clientes antes de registrar vendas!")
-                if st.button("Ir para Cadastro de Clientes ➡️"):
-                    st.session_state.menu = "Clientes"
-                    st.rerun()
-                return
-                
+        col_c1, col_c2 = st.columns([4,1])
+        with col_c1:
             cliente_id = st.selectbox(
                 "Cliente*",
                 options=[str(c["_id"]) for c in clientes_ativos],
                 format_func=lambda x: next(c["nome"] for c in clientes_ativos if str(c["_id"]) == x),
                 key="select_cliente_nova_venda"
             )
-        except Exception as e:
-            st.error(f"Erro ao carregar clientes: {str(e)}")
-            return
+        with col_c2:
+            if st.button("➕ Novo Cliente", use_container_width=True):
+                st.session_state.menu = "Clientes"
+                st.rerun()
 
         # Seção 2: Seleção de Produtos
-        try:
-            produtos_disponiveis = list(produtos_col.find({
-                "ativo": True,
-                "estoque": {"$gt": 0}
-            }).sort("nome", 1))
-            
-            if not produtos_disponiveis:
-                st.warning("Nenhum produto disponível em estoque!")
-                if st.button("Ir para Gestão de Produtos ➡️"):
-                    st.session_state.menu = "Produtos"
-                    st.rerun()
-                return
-        except Exception as e:
-            st.error(f"Erro ao carregar produtos: {str(e)}")
-            return
+        produtos_disponiveis = list(produtos_col.find({
+            "ativo": True,
+            "estoque": {"$gt": 0}
+        }).sort("nome", 1))
+        
+        if not produtos_disponiveis:
+            st.warning("Nenhum produto disponível em estoque!")
+            if st.button("Ir para Gestão de Produtos ➡️"):
+                st.session_state.menu = "Produtos"
+                st.rerun()
+            st.stop()
 
         # Inicializa os itens da venda na sessão
         if 'itens_venda' not in st.session_state:
@@ -729,8 +505,8 @@ def modulo_vendas(db):
             
         # Interface para adicionar itens
         with st.container(border=True):
-            col1, col2, col3 = st.columns([4, 2, 2])
-            with col1:
+            col_p1, col_p2, col_p3 = st.columns([4, 2, 2])
+            with col_p1:
                 produto_id = st.selectbox(
                     "Selecione o produto",
                     options=[str(p["_id"]) for p in produtos_disponiveis],
@@ -741,14 +517,14 @@ def modulo_vendas(db):
                     ),
                     key="select_produto_nova_venda"
                 )
-            with col2:
+            with col_p2:
                 quantidade = st.number_input(
                     "Quantidade",
                     min_value=1,
                     value=1,
                     key="qtd_produto_nova_venda"
                 )
-            with col3:
+            with col_p3:
                 st.write("")  # Espaçamento
                 if st.button("➕ Adicionar", key="btn_add_item", use_container_width=True):
                     try:
@@ -790,8 +566,6 @@ def modulo_vendas(db):
             
             # Cria DataFrame para exibição
             df_itens = pd.DataFrame(st.session_state.itens_venda)
-            
-            # Adiciona coluna de ações
             df_itens['Remover'] = False
             
             # Editor de dados com opção de remoção
@@ -818,10 +592,8 @@ def modulo_vendas(db):
             
             # Processa remoção de itens marcados
             if not edited_df[edited_df['Remover']].empty:
-                # Filtra apenas os itens não marcados para remoção
                 itens_manter = [item for idx, item in enumerate(st.session_state.itens_venda) 
                                if not edited_df.iloc[idx]['Remover']]
-                
                 st.session_state.itens_venda = itens_manter
                 st.rerun()
             
@@ -832,7 +604,7 @@ def modulo_vendas(db):
                 for item in st.session_state.itens_venda
             )
             
-            # Exibe totais em cards
+            # Exibe totais
             col_res1, col_res2, col_res3 = st.columns(3)
             with col_res1:
                 st.metric("Total Itens", len(st.session_state.itens_venda))
@@ -840,6 +612,55 @@ def modulo_vendas(db):
                 st.metric("Total da Venda", f"R$ {total_venda:,.2f}")
             with col_res3:
                 st.metric("Lucro Estimado", f"R$ {lucro_estimado:,.2f}")
+            
+            # Seção de Pagamento
+            st.subheader("Forma de Pagamento", divider="rainbow")
+            
+            metodo_pagamento = st.radio(
+                "Método de Pagamento*",
+                ["Dinheiro", "Cartão de Crédito", "Cartão de Débito", "PIX", "Transferência Bancária"],
+                horizontal=True
+            )
+            
+            # Configurações específicas por método de pagamento
+            detalhes_pagamento = {}
+            
+            if metodo_pagamento == "Dinheiro":
+                valor_recebido = st.number_input(
+                    "Valor Recebido (R$)*",
+                    min_value=0.0,
+                    value=float(total_venda),
+                    step=1.0,
+                    format="%.2f"
+                )
+                troco = valor_recebido - total_venda
+                if troco >= 0:
+                    st.success(f"Troco: R$ {troco:.2f}")
+                    detalhes_pagamento["troco"] = troco
+                else:
+                    st.error("Valor insuficiente!")
+                    st.stop()
+            
+            elif "Cartão" in metodo_pagamento:
+                parcelas = st.selectbox(
+                    "Número de Parcelas*",
+                    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+                    index=0
+                )
+                valor_parcela = total_venda / parcelas
+                st.write(f"💸 {parcelas}x de R$ {valor_parcela:.2f}")
+                detalhes_pagamento["parcelas"] = parcelas
+            
+            elif metodo_pagamento == "PIX":
+                st.write("🔳 **Chave PIX:** `vendas@sualoja.com.br`")
+                st.image("https://via.placeholder.com/200?text=QR+CODE+PIX", width=200)
+            
+            elif metodo_pagamento == "Transferência Bancária":
+                st.write("🏦 **Dados para Transferência:**")
+                st.write("- Banco: **000** | Agência: **1234** | Conta: **56789-0**")
+                comprovante = st.file_uploader("Envie o comprovante (opcional)", type=["jpg", "png", "pdf"])
+                if comprovante:
+                    detalhes_pagamento["comprovante"] = "Enviado"
             
             # Finalização da venda
             if st.button("✅ Finalizar Venda", type="primary", use_container_width=True):
@@ -853,7 +674,8 @@ def modulo_vendas(db):
                             "lucro_total": lucro_estimado,
                             "status": "concluída",
                             "itens_count": len(st.session_state.itens_venda),
-                            "metodo_pagamento": "dinheiro"  # Pode ser expandido
+                            "metodo_pagamento": metodo_pagamento.lower(),
+                            "detalhes_pagamento": detalhes_pagamento
                         }
                         
                         # Insere a venda e obtém o ID
@@ -901,6 +723,13 @@ def modulo_vendas(db):
                             st.write(f"**Cliente:** {cliente['nome']}")
                             st.write(f"**Data/Hora:** {datetime.now().strftime('%d/%m/%Y %H:%M')}")
                             st.write(f"**Total:** R$ {total_venda:,.2f}")
+                            st.write(f"**Pagamento:** {metodo_pagamento}")
+                            if metodo_pagamento == "Dinheiro":
+                                st.write(f"**Valor Recebido:** R$ {valor_recebido:,.2f}")
+                                st.write(f"**Troco:** R$ {troco:,.2f}")
+                            elif "Cartão" in metodo_pagamento:
+                                st.write(f"**Parcelas:** {parcelas}x de R$ {valor_parcela:,.2f}")
+                            
                             st.write("**Itens:**")
                             for item in st.session_state.itens_venda:
                                 st.write(f"- {item['nome']} ({item['quantidade']} x R$ {item['preco_unitario']:.2f})")
@@ -914,9 +743,6 @@ def modulo_vendas(db):
                     st.error(f"Erro ao registrar venda: {str(e)}")
                     st.error("Nenhuma alteração foi aplicada no banco de dados.")
 
-    # =============================================
-    # ABA: HISTÓRICO
-    # =============================================
     with tab2:
         st.subheader("Histórico de Vendas")
         
@@ -936,11 +762,10 @@ def modulo_vendas(db):
                     key="hist_data_fim"
                 )
             with col_f3:
-                status_filtro = st.selectbox(
-                    "Status",
-                    ["Todas", "Concluída", "Cancelada"],
-                    index=0,
-                    key="hist_status"
+                filtro_pagamento = st.selectbox(
+                    "Forma de Pagamento",
+                    ["Todas", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "PIX", "Transferência Bancária"],
+                    index=0
                 )
         
         # Aplica filtros
@@ -951,8 +776,8 @@ def modulo_vendas(db):
             }
         }
         
-        if status_filtro != "Todas":
-            filtro["status"] = status_filtro.lower()
+        if filtro_pagamento != "Todas":
+            filtro["metodo_pagamento"] = filtro_pagamento.lower()
         
         try:
             # Consulta as vendas
@@ -968,13 +793,13 @@ def modulo_vendas(db):
                         cliente = clientes_col.find_one({"_id": ObjectId(venda["cliente_id"])})
                         dados_vendas.append({
                             "ID": str(venda["_id"]),
-                            "Cliente ID": venda["cliente_id"],  # Adicionado para operações de exclusão
                             "Data": venda["data_venda"].strftime("%d/%m/%Y %H:%M"),
                             "Cliente": cliente["nome"] if cliente else "Cliente não encontrado",
                             "Valor Total": venda["valor_total"],
+                            "Pagamento": venda["metodo_pagamento"].capitalize(),
                             "Status": venda["status"].capitalize(),
                             "Itens": venda["itens_count"],
-                            "Ações": "Manter"  # Nova coluna para ações
+                            "Ações": "Manter"
                         })
                     except:
                         continue
@@ -986,15 +811,12 @@ def modulo_vendas(db):
                 edited_df = st.data_editor(
                     df_vendas,
                     column_config={
+                        "Valor Total": st.column_config.NumberColumn(format="R$ %.2f"),
                         "Ações": st.column_config.SelectboxColumn(
                             "Ações",
-                            options=["Manter", "Apagar"],
+                            options=["Manter", "Cancelar"],
                             required=True
-                        ),
-                        "Valor Total": st.column_config.NumberColumn(
-                            format="R$ %.2f"
-                        ),
-                        "Cliente ID": None  # Oculta esta coluna na exibição
+                        )
                     },
                     hide_index=True,
                     use_container_width=True,
@@ -1002,14 +824,14 @@ def modulo_vendas(db):
                     key="editor_historico_vendas"
                 )
 
-                # Processa vendas marcadas para apagar
-                if not edited_df[edited_df['Ações'] == "Apagar"].empty:
+                # Processa vendas marcadas para cancelar
+                if not edited_df[edited_df['Ações'] == "Cancelar"].empty:
                     st.warning("⚠️ Atenção: Esta ação não pode ser desfeita!")
                     
-                    if st.button("Confirmar Exclusão", type="primary"):
-                        with st.spinner("Processando exclusão..."):
+                    if st.button("Confirmar Cancelamento", type="primary"):
+                        with st.spinner("Processando cancelamento..."):
                             try:
-                                for idx, row in edited_df[edited_df['Ações'] == "Apagar"].iterrows():
+                                for idx, row in edited_df[edited_df['Ações'] == "Cancelar"].iterrows():
                                     venda_id = row['ID']
                                     
                                     # 1. Recupera itens da venda
@@ -1028,7 +850,7 @@ def modulo_vendas(db):
                                     # 4. Atualiza cliente
                                     valor_venda = vendas_col.find_one({"_id": ObjectId(venda_id)})["valor_total"]
                                     clientes_col.update_one(
-                                        {"_id": ObjectId(row['Cliente ID'])},
+                                        {"_id": ObjectId(venda["cliente_id"])},
                                         {
                                             "$inc": {
                                                 "compras_realizadas": -1,
@@ -1037,22 +859,24 @@ def modulo_vendas(db):
                                         }
                                     )
                                     
-                                    # 5. Remove venda principal
-                                    vendas_col.delete_one({"_id": ObjectId(venda_id)})
+                                    # 5. Atualiza status da venda
+                                    vendas_col.update_one(
+                                        {"_id": ObjectId(venda_id)},
+                                        {"$set": {"status": "cancelada"}}
+                                    )
                                 
-                                st.success("Vendas excluídas com sucesso!")
+                                st.success("Vendas canceladas com sucesso!")
                                 st.balloons()
                                 st.rerun()
                             
                             except Exception as e:
-                                st.error(f"Erro ao excluir: {str(e)}")
-                                st.error("Algumas operações podem não ter sido completadas.")
+                                st.error(f"Erro ao cancelar: {str(e)}")
 
                 # Detalhes da venda selecionada
                 if len(dados_vendas) > 0:
                     venda_selecionada = st.selectbox(
                         "Selecione uma venda para detalhar",
-                        options=[v["ID"] for v in dados_vendas if v["Ações"] == "Manter"],  # Filtra apenas vendas mantidas
+                        options=[v["ID"] for v in dados_vendas if v["Ações"] == "Manter"],
                         format_func=lambda x: next(
                             f"{v['Data']} - {v['Cliente']} - R$ {v['Valor Total']:.2f}" 
                             for v in dados_vendas 
@@ -1095,14 +919,11 @@ def modulo_vendas(db):
         except Exception as e:
             st.error(f"Erro ao carregar histórico de vendas: {str(e)}")
 
-    # =============================================
-    # ABA: RELATÓRIOS
-    # =============================================
     with tab3:
         st.subheader("Relatórios de Vendas")
         
         # Filtro por período
-        col_r1, col_r2 = st.columns(2)
+        col_r1, col_r2, col_r3 = st.columns(3)
         with col_r1:
             data_inicio_rel = st.date_input(
                 "Data inicial", 
@@ -1114,6 +935,13 @@ def modulo_vendas(db):
                 "Data final", 
                 value=datetime.now(),
                 key="rel_data_fim"
+            )
+        with col_r3:
+            filtro_pagamento_rel = st.selectbox(
+                "Forma de Pagamento",
+                ["Todas", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "PIX", "Transferência Bancária"],
+                index=0,
+                key="rel_pagamento"
             )
         
         # Métricas rápidas
@@ -1128,6 +956,9 @@ def modulo_vendas(db):
                         },
                         "status": "concluída"
                     }
+                    
+                    if filtro_pagamento_rel != "Todas":
+                        filtro_rel["metodo_pagamento"] = filtro_pagamento_rel.lower()
                     
                     # Calcula métricas básicas
                     total_vendas = vendas_col.count_documents(filtro_rel)
@@ -1187,6 +1018,25 @@ def modulo_vendas(db):
                     else:
                         st.info("Nenhum dado disponível para o período selecionado.")
                     
+                    # Vendas por forma de pagamento
+                    st.subheader("Vendas por Forma de Pagamento")
+                    vendas_pagamento = vendas_col.aggregate([
+                        {"$match": filtro_rel},
+                        {"$group": {
+                            "_id": "$metodo_pagamento",
+                            "total": {"$sum": "$valor_total"},
+                            "count": {"$sum": 1}
+                        }},
+                        {"$sort": {"total": -1}}
+                    ])
+                    
+                    df_pagamento = pd.DataFrame(list(vendas_pagamento))
+                    if not df_pagamento.empty:
+                        df_pagamento = df_pagamento.rename(columns={"_id": "Pagamento", "total": "Valor", "count": "Quantidade"})
+                        st.bar_chart(df_pagamento.set_index("Pagamento")["Valor"])
+                    else:
+                        st.info("Nenhum dado disponível sobre formas de pagamento.")
+                    
                     # Top produtos
                     st.subheader("Produtos Mais Vendidos")
                     top_produtos = itens_col.aggregate([
@@ -1197,13 +1047,7 @@ def modulo_vendas(db):
                             "as": "venda"
                         }},
                         {"$unwind": "$venda"},
-                        {"$match": {
-                            "venda.data_venda": {
-                                "$gte": datetime.combine(data_inicio_rel, datetime.min.time()),
-                                "$lte": datetime.combine(data_fim_rel, datetime.max.time())
-                            },
-                            "venda.status": "concluída"
-                        }},
+                        {"$match": filtro_rel},
                         {"$group": {
                             "_id": "$produto_id",
                             "total_vendido": {"$sum": "$quantidade"},
@@ -1228,419 +1072,357 @@ def modulo_vendas(db):
                                         st.progress(min(percentual, 100))
                     else:
                         st.info("Nenhum dado disponível sobre produtos vendidos.")
+                    
+                    # Exportação para Excel
+                    st.subheader("Exportar Dados")
+                    vendas_export = list(vendas_col.find(filtro_rel))
+                    if vendas_export:
+                        df_export = pd.DataFrame([{
+                            "Data": v["data_venda"].strftime("%d/%m/%Y %H:%M"),
+                            "Cliente": clientes_col.find_one({"_id": ObjectId(v["cliente_id"])})["nome"],
+                            "Valor Total": v["valor_total"],
+                            "Pagamento": v["metodo_pagamento"].capitalize(),
+                            "Itens": v["itens_count"]
+                        } for v in vendas_export])
+                        
+                        excel_data = generate_excel(df_export)
+                        st.download_button(
+                            label="📥 Exportar para Excel",
+                            data=excel_data,
+                            file_name=f"relatorio_vendas_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                    else:
+                        st.warning("Nenhum dado para exportar")
             except Exception as e:
                 st.error(f"Erro ao gerar relatório: {str(e)}")
 
-    # =============================================
-    # ABA: EDITAR VENDA
-    # =============================================
-    with tab4:
-        st.subheader("Editar Venda Existente")
-        
-        # Filtro para selecionar a venda
-        with st.expander("🔎 Filtros de Busca", expanded=True):
-            col_edit1, col_edit2 = st.columns(2)
-            with col_edit1:
-                edit_data_inicio = st.date_input(
-                    "Data inicial", 
-                    value=datetime.now() - timedelta(days=30),
-                    key="edit_data_inicio_venda"
-                )
-            with col_edit2:
-                edit_data_fim = st.date_input(
-                    "Data final", 
-                    value=datetime.now(),
-                    key="edit_data_fim_venda"
-                )
-            
-            if st.button("Buscar Vendas", key="btn_buscar_vendas_editar"):
-                try:
-                    filtro_edit = {
-                        "data_venda": {
-                            "$gte": datetime.combine(edit_data_inicio, datetime.min.time()),
-                            "$lte": datetime.combine(edit_data_fim, datetime.max.time())
-                        }
-                    }
-                    st.session_state.vendas_para_editar = list(vendas_col.find(filtro_edit).sort("data_venda", -1))
-                except Exception as e:
-                    st.error(f"Erro ao buscar vendas: {str(e)}")
-        
-        # Seleção da venda para edição
-        if 'vendas_para_editar' in st.session_state and st.session_state.vendas_para_editar:
-            vendas_lista = st.session_state.vendas_para_editar
-            venda_selecionada = st.selectbox(
-                "Selecione a venda para editar",
-                options=[str(v["_id"]) for v in vendas_lista],
-                format_func=lambda x: next(
-                    f"{v['data_venda'].strftime('%d/%m/%Y %H:%M')} - {clientes_col.find_one({'_id': ObjectId(v['cliente_id'])})['nome']} - R$ {v['valor_total']:.2f}"
-                    for v in vendas_lista if str(v["_id"]) == x
-                ),
-                key="select_venda_editar"
-            )
-            
-            if venda_selecionada:
-                try:
-                    venda = vendas_col.find_one({"_id": ObjectId(venda_selecionada)})
-                    cliente = clientes_col.find_one({"_id": ObjectId(venda["cliente_id"])})
-                    itens_venda = list(itens_col.find({"venda_id": venda_selecionada}))
-                    
-                    st.write(f"**Cliente:** {cliente['nome']}")
-                    st.write(f"**Data da Venda:** {venda['data_venda'].strftime('%d/%m/%Y %H:%M')}")
-                    st.write(f"**Valor Total Atual:** R$ {venda['valor_total']:.2f}")
-                    
-                    # Formulário de edição
-                    with st.form("form_editar_venda"):
-                        novos_itens = []
-                        valor_total = 0
-                        lucro_total = 0
-                        
-                        st.subheader("Itens da Venda")
-                        
-                        for idx, item in enumerate(itens_venda):
-                            produto = produtos_col.find_one({"_id": ObjectId(item["produto_id"])})
-                            if not produto:
-                                continue
-                            
-                            col_item1, col_item2, col_item3, col_item4 = st.columns([4, 2, 2, 1])
-                            
-                            with col_item1:
-                                st.write(f"**{produto['nome']}**")
-                                st.write(f"Estoque atual: {produto['estoque'] + item['quantidade']}")
-                            with col_item2:
-                                nova_quantidade = st.number_input(
-                                    "Quantidade",
-                                    min_value=0,
-                                    value=item["quantidade"],
-                                    key=f"edit_qtd_{idx}"
-                                )
-                            with col_item3:
-                                novo_preco = st.number_input(
-                                    "Preço unitário",
-                                    min_value=0.01,
-                                    value=float(item["preco_unitario"]),
-                                    step=0.01,
-                                    format="%.2f",
-                                    key=f"edit_preco_{idx}"
-                                )
-                            with col_item4:
-                                remover = st.checkbox(
-                                    "Remover",
-                                    key=f"edit_remover_{idx}"
-                                )
-                            
-                            if not remover and nova_quantidade > 0:
-                                subtotal = nova_quantidade * novo_preco
-                                custo = nova_quantidade * item["custo_unitario"]
-                                novos_itens.append({
-                                    "produto_id": item["produto_id"],
-                                    "quantidade": nova_quantidade,
-                                    "preco_unitario": novo_preco,
-                                    "custo_unitario": item["custo_unitario"],
-                                    "subtotal": subtotal,
-                                    "item_original": item
-                                })
-                                valor_total += subtotal
-                                lucro_total += (novo_preco - item["custo_unitario"]) * nova_quantidade
-                        
-                        # Adicionar novo item
-                        st.subheader("Adicionar Novo Item")
-                        produtos_disponiveis_edicao = list(produtos_col.find({"ativo": True}).sort("nome", 1))
-                        
-                        col_add1, col_add2, col_add3 = st.columns([3, 2, 2])
-                        with col_add1:
-                            novo_produto_id = st.selectbox(
-                                "Produto",
-                                options=[str(p["_id"]) for p in produtos_disponiveis_edicao],
-                                format_func=lambda x: next(
-                                    f"{p['nome']} (Estoque: {p['estoque']})" 
-                                    for p in produtos_disponiveis_edicao 
-                                    if str(p["_id"]) == x
-                                ),
-                                key="novo_produto_edicao"
-                            )
-                        with col_add2:
-                            nova_qtd = st.number_input(
-                                "Quantidade", 
-                                min_value=1, 
-                                value=1, 
-                                key="nova_qtd_edicao"
-                            )
-                        with col_add3:
-                            novo_preco_add = st.number_input(
-                                "Preço unitário",
-                                min_value=0.01,
-                                value=next(
-                                    p["preco_venda"] 
-                                    for p in produtos_disponiveis_edicao 
-                                    if str(p["_id"]) == novo_produto_id
-                                ),
-                                step=0.01,
-                                format="%.2f",
-                                key="novo_preco_edicao"
-                            )
-                        
-                        if st.form_submit_button("Salvar Alterações", type="primary"):
-                            try:
-                                with st.spinner("Atualizando venda..."):
-                                    # Processa as alterações nos itens existentes
-                                    for item in novos_itens:
-                                        # Calcula a diferença na quantidade
-                                        diff = item["quantidade"] - item["item_original"]["quantidade"]
-                                        
-                                        if diff != 0:
-                                            # Atualiza o estoque
-                                            produtos_col.update_one(
-                                                {"_id": ObjectId(item["produto_id"])},
-                                                {"$inc": {"estoque": -diff}}
-                                            )
-                                        
-                                        # Atualiza o item na venda
-                                        itens_col.update_one(
-                                            {"_id": item["item_original"]["_id"]},
-                                            {
-                                                "$set": {
-                                                    "quantidade": item["quantidade"],
-                                                    "preco_unitario": item["preco_unitario"],
-                                                    "subtotal": item["subtotal"]
-                                                }
-                                            }
-                                        )
-                                    
-                                    # Remove os itens marcados para remoção
-                                    for idx, item in enumerate(itens_venda):
-                                        if st.session_state.get(f"edit_remover_{idx}", False):
-                                            # Devolve ao estoque
-                                            produtos_col.update_one(
-                                                {"_id": ObjectId(item["produto_id"])},
-                                                {"$inc": {"estoque": item["quantidade"]}}
-                                            )
-                                            # Remove o item
-                                            itens_col.delete_one({"_id": item["_id"]})
-                                    
-                                    # Adiciona novos itens se houver
-                                    if novo_produto_id and nova_qtd > 0:
-                                        produto_add = produtos_col.find_one({"_id": ObjectId(novo_produto_id)})
-                                        
-                                        # Verifica estoque
-                                        if produto_add["estoque"] < nova_qtd:
-                                            st.error(f"Estoque insuficiente para {produto_add['nome']}")
-                                            return
-                                        
-                                        # Adiciona o item
-                                        novo_item = {
-                                            "venda_id": venda_selecionada,
-                                            "produto_id": novo_produto_id,
-                                            "quantidade": nova_qtd,
-                                            "preco_unitario": novo_preco_add,
-                                            "custo_unitario": produto_add.get("custo_producao", 0),
-                                            "subtotal": nova_qtd * novo_preco_add
-                                        }
-                                        itens_col.insert_one(novo_item)
-                                        
-                                        # Atualiza estoque
-                                        produtos_col.update_one(
-                                            {"_id": ObjectId(novo_produto_id)},
-                                            {"$inc": {"estoque": -nova_qtd}}
-                                        )
-                                        
-                                        valor_total += novo_item["subtotal"]
-                                        lucro_total += (novo_preco_add - produto_add.get("custo_producao", 0)) * nova_qtd
-                                    
-                                    # Atualiza a venda principal
-                                    vendas_col.update_one(
-                                        {"_id": ObjectId(venda_selecionada)},
-                                        {
-                                            "$set": {
-                                                "valor_total": valor_total,
-                                                "lucro_total": lucro_total,
-                                                "itens_count": len(novos_itens) + (1 if novo_produto_id and nova_qtd > 0 else 0),
-                                                "ultima_atualizacao": datetime.now()
-                                            }
-                                        }
-                                    )
-                                    
-                                    st.success("Venda atualizada com sucesso!")
-                                    st.balloons()
-                                    pytime.sleep(2)
-                                    st.rerun()
-                            
-                            except Exception as e:
-                                st.error(f"Erro ao atualizar venda: {str(e)}")
-                except Exception as e:
-                    st.error(f"Erro ao carregar dados da venda: {str(e)}")
 # =============================================
 # MÓDULO DE RELATÓRIOS
 # =============================================
+
 def modulo_relatorios(db):
-    st.title("📊 Relatórios")
+    st.title("📊 Relatórios Avançados")
+    
     vendas_col = db['vendas']
     produtos_col = db['produtos']
     clientes_col = db['clientes']
-    itens_venda_col = db['itens_venda']
+    itens_col = db['itens_venda']
 
-    tab1, tab2, tab3 = st.tabs(["Vendas", "Produtos", "Clientes"])
+    tab1, tab2, tab3 = st.tabs(["📈 Vendas", "📦 Produtos", "👥 Clientes"])
 
     with tab1:
-        st.subheader("Relatório de Vendas")
-
+        st.subheader("Relatório Analítico de Vendas")
+        
         col1, col2 = st.columns(2)
         with col1:
-            data_inicio = st.date_input("Data Início")
+            data_inicio = st.date_input(
+                "Data Início",
+                value=datetime.now() - timedelta(days=30),
+                key="rel_vendas_inicio"
+            )
         with col2:
-            data_fim = st.date_input("Data Fim")
-
-        if st.button("Gerar Relatório"):
-            pipeline = [
-                {
-                    "$match": {
-                        "data_venda": {
-                            "$gte": datetime.combine(data_inicio, datetime.min.time()),
-                            "$lte": datetime.combine(data_fim, datetime.max.time())
+            data_fim = st.date_input(
+                "Data Fim",
+                value=datetime.now(),
+                key="rel_vendas_fim"
+            )
+        
+        if st.button("Gerar Relatório de Vendas", key="btn_rel_vendas"):
+            try:
+                pipeline = [
+                    {
+                        "$match": {
+                            "data_venda": {
+                                "$gte": datetime.combine(data_inicio, datetime.min.time()),
+                                "$lte": datetime.combine(data_fim, datetime.max.time())
+                            },
+                            "status": "concluída"
                         }
+                    },
+                    {
+                        "$lookup": {
+                            "from": "clientes",
+                            "localField": "cliente_id",
+                            "foreignField": "_id",
+                            "as": "cliente"
+                        }
+                    },
+                    {
+                        "$unwind": "$cliente"
+                    },
+                    {
+                        "$sort": {"data_venda": -1}
                     }
-                },
-                {
-                    "$lookup": {
-                        "from": "clientes",
-                        "localField": "cliente_id",
-                        "foreignField": "_id",
-                        "as": "cliente"
-                    }
-                },
-                {
-                    "$unwind": "$cliente"
-                },
-                {
-                    "$sort": {"data_venda": 1}
-                }
-            ]
-            vendas = list(vendas_col.aggregate(pipeline))
-            
-            if vendas:
-                vendas_data = []
-                for venda in vendas:
-                    vendas_data.append({
-                        "id": str(venda['_id']),
-                        "cliente": venda['cliente']['nome'],
-                        "data_venda": venda['data_venda'],
-                        "valor_total": venda['valor_total'],
-                        "lucro_total": venda['lucro_total']
-                    })
+                ]
                 
-                df_vendas = pd.DataFrame(vendas_data)
-                st.dataframe(df_vendas)
-
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.metric("Total de Vendas", f"R$ {df_vendas['valor_total'].sum():.2f}")
-                with col2:
-                    st.metric("Lucro Total", f"R$ {df_vendas['lucro_total'].sum():.2f}")
-
-                st.bar_chart(df_vendas.set_index('data_venda')['valor_total'])
-            else:
-                st.warning("Nenhuma venda no período selecionado")
+                vendas = list(vendas_col.aggregate(pipeline))
+                
+                if vendas:
+                    dados_vendas = []
+                    for venda in vendas:
+                        dados_vendas.append({
+                            "ID": str(venda["_id"]),
+                            "Data": venda["data_venda"].strftime("%d/%m/%Y %H:%M"),
+                            "Cliente": venda["cliente"]["nome"],
+                            "Valor Total": venda["valor_total"],
+                            "Lucro": venda["lucro_total"],
+                            "Pagamento": venda["metodo_pagamento"].capitalize(),
+                            "Itens": venda["itens_count"]
+                        })
+                    
+                    df_vendas = pd.DataFrame(dados_vendas)
+                    
+                    # Métricas resumidas
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total de Vendas", len(df_vendas))
+                    with col2:
+                        st.metric("Faturamento Total", f"R$ {df_vendas['Valor Total'].sum():,.2f}")
+                    with col3:
+                        st.metric("Lucro Total", f"R$ {df_vendas['Lucro'].sum():,.2f}")
+                    
+                    # Gráficos
+                    st.subheader("Análise Temporal")
+                    df_vendas['Data'] = pd.to_datetime(df_vendas['Data'], format='%d/%m/%Y %H:%M')
+                    df_vendas['Dia'] = df_vendas['Data'].dt.date
+                    
+                    vendas_dia = df_vendas.groupby('Dia').agg({
+                        'Valor Total': 'sum',
+                        'ID': 'count'
+                    }).rename(columns={'ID': 'Quantidade'})
+                    
+                    tab1, tab2 = st.tabs(["Valor", "Quantidade"])
+                    with tab1:
+                        st.line_chart(vendas_dia['Valor Total'])
+                    with tab2:
+                        st.bar_chart(vendas_dia['Quantidade'])
+                    
+                    # Análise por forma de pagamento
+                    st.subheader("Por Forma de Pagamento")
+                    pagamento_analise = df_vendas.groupby('Pagamento').agg({
+                        'Valor Total': ['sum', 'count'],
+                        'Lucro': 'sum'
+                    })
+                    st.dataframe(pagamento_analise)
+                    
+                    # Exportação
+                    excel_data = generate_excel(df_vendas)
+                    st.download_button(
+                        label="📥 Exportar para Excel",
+                        data=excel_data,
+                        file_name=f"relatorio_vendas_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                else:
+                    st.info("Nenhuma venda encontrada no período selecionado.")
+            except Exception as e:
+                st.error(f"Erro ao gerar relatório: {str(e)}")
 
     with tab2:
         st.subheader("Relatório de Produtos")
-        pipeline = [
-            {
-                "$lookup": {
-                    "from": "itens_venda",
-                    "localField": "_id",
-                    "foreignField": "produto_id",
-                    "as": "itens_venda"
-                }
-            },
-            {
-                "$project": {
-                    "nome": 1,
-                    "estoque": 1,
-                    "preco_venda": 1,
-                    "custo_producao": 1,
-                    "vendidos": {"$sum": "$itens_venda.quantidade"},
-                    "lucro": {
-                        "$multiply": [
-                            {"$subtract": ["$preco_venda", "$custo_producao"]},
-                            {"$sum": "$itens_venda.quantidade"}
-                        ]
-                    }
-                }
-            }
-        ]
-        produtos = list(produtos_col.aggregate(pipeline))
         
-        if produtos:
-            df_produtos = pd.DataFrame(produtos)
-            st.dataframe(df_produtos)
-            st.bar_chart(df_produtos.set_index('nome')['vendidos'])
-        else:
-            st.info("Nenhum produto com vendas registradas.")
+        if st.button("Gerar Relatório de Produtos", key="btn_rel_produtos"):
+            try:
+                pipeline = [
+                    {
+                        "$lookup": {
+                            "from": "itens_venda",
+                            "localField": "_id",
+                            "foreignField": "produto_id",
+                            "as": "itens_venda"
+                        }
+                    },
+                    {
+                        "$project": {
+                            "nome": 1,
+                            "categoria": 1,
+                            "preco_venda": 1,
+                            "custo_producao": 1,
+                            "estoque": 1,
+                            "vendidos": {"$sum": "$itens_venda.quantidade"},
+                            "faturamento": {
+                                "$sum": {
+                                    "$map": {
+                                        "input": "$itens_venda",
+                                        "as": "item",
+                                        "in": {"$multiply": ["$$item.quantidade", "$$item.preco_unitario"]}
+                                    }
+                                }
+                            },
+                            "lucro": {
+                                "$sum": {
+                                    "$map": {
+                                        "input": "$itens_venda",
+                                        "as": "item",
+                                        "in": {
+                                            "$multiply": [
+                                                {"$subtract": ["$$item.preco_unitario", "$custo_producao"]},
+                                                "$$item.quantidade"
+                                            ]
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    {
+                        "$sort": {"vendidos": -1}
+                    }
+                ]
+                
+                produtos = list(produtos_col.aggregate(pipeline))
+                
+                if produtos:
+                    df_produtos = pd.DataFrame(produtos)
+                    
+                    # Métricas resumidas
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total de Produtos", len(df_produtos))
+                    with col2:
+                        st.metric("Faturamento Total", f"R$ {df_produtos['faturamento'].sum():,.2f}")
+                    with col3:
+                        st.metric("Lucro Total", f"R$ {df_produtos['lucro'].sum():,.2f}")
+                    
+                    # Análise por categoria
+                    st.subheader("Por Categoria")
+                    categoria_analise = df_produtos.groupby('categoria').agg({
+                        'vendidos': 'sum',
+                        'faturamento': 'sum',
+                        'lucro': 'sum'
+                    })
+                    st.dataframe(categoria_analise)
+                    
+                    # Top produtos
+                    st.subheader("Top 10 Produtos Mais Vendidos")
+                    top_produtos = df_produtos.sort_values('vendidos', ascending=False).head(10)
+                    st.bar_chart(top_produtos.set_index('nome')['vendidos'])
+                    
+                    # Exportação
+                    excel_data = generate_excel(df_produtos)
+                    st.download_button(
+                        label="📥 Exportar para Excel",
+                        data=excel_data,
+                        file_name=f"relatorio_produtos_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                else:
+                    st.info("Nenhum dado disponível sobre produtos.")
+            except Exception as e:
+                st.error(f"Erro ao gerar relatório: {str(e)}")
 
     with tab3:
         st.subheader("Relatório de Clientes")
-        pipeline = [
-            {
-                "$lookup": {
-                    "from": "vendas",
-                    "localField": "_id",
-                    "foreignField": "cliente_id",
-                    "as": "vendas"
-                }
-            },
-            {
-                "$project": {
-                    "nome": 1,
-                    "celular": 1,
-                    "total_compras": {"$size": "$vendas"},
-                    "total_gasto": {"$sum": "$vendas.valor_total"}
-                }
-            }
-        ]
-        clientes = list(clientes_col.aggregate(pipeline))
         
-        if clientes:
-            df_clientes = pd.DataFrame(clientes)
-            st.dataframe(df_clientes)
-            st.bar_chart(df_clientes.set_index('nome')['total_gasto'])
-        else:
-            st.info("Nenhum cliente com compras registradas.")
+        if st.button("Gerar Relatório de Clientes", key="btn_rel_clientes"):
+            try:
+                pipeline = [
+                    {
+                        "$lookup": {
+                            "from": "vendas",
+                            "localField": "_id",
+                            "foreignField": "cliente_id",
+                            "as": "vendas"
+                        }
+                    },
+                    {
+                        "$project": {
+                            "nome": 1,
+                            "tipo": 1,
+                            "total_compras": {"$size": "$vendas"},
+                            "total_gasto": {"$sum": "$vendas.valor_total"},
+                            "ultima_compra": {"$max": "$vendas.data_venda"}
+                        }
+                    },
+                    {
+                        "$sort": {"total_gasto": -1}
+                    }
+                ]
+                
+                clientes = list(clientes_col.aggregate(pipeline))
+                
+                if clientes:
+                    df_clientes = pd.DataFrame(clientes)
+                    
+                    # Métricas resumidas
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total de Clientes", len(df_clientes))
+                    with col2:
+                        st.metric("Faturamento Total", f"R$ {df_clientes['total_gasto'].sum():,.2f}")
+                    with col3:
+                        st.metric("Compras Realizadas", df_clientes['total_compras'].sum())
+                    
+                    # Clientes mais valiosos
+                    st.subheader("Top 10 Clientes (Por Valor Gasto)")
+                    top_clientes = df_clientes.sort_values('total_gasto', ascending=False).head(10)
+                    st.bar_chart(top_clientes.set_index('nome')['total_gasto'])
+                    
+                    # Análise por tipo de cliente
+                    st.subheader("Por Tipo de Cliente")
+                    tipo_analise = df_clientes.groupby('tipo').agg({
+                        'total_compras': 'sum',
+                        'total_gasto': 'sum'
+                    })
+                    st.dataframe(tipo_analise)
+                    
+                    # Exportação
+                    excel_data = generate_excel(df_clientes)
+                    st.download_button(
+                        label="📥 Exportar para Excel",
+                        data=excel_data,
+                        file_name=f"relatorio_clientes_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                else:
+                    st.info("Nenhum dado disponível sobre clientes.")
+            except Exception as e:
+                st.error(f"Erro ao gerar relatório: {str(e)}")
 
 # =============================================
 # FUNÇÃO PRINCIPAL
 # =============================================
-def main():
-    # Configuração do Streamlit
-    st.set_page_config(
-        page_title="Sistema de Vendas", 
-        layout="wide",
-        page_icon="🛒"
-    )
 
-    # Conexão com o MongoDB Atlas
+def main():
+    st.set_page_config(
+        page_title="Sistema de Vendas",
+        page_icon="🛒",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+    
+    # Conexão com o banco de dados
     db = get_database()
     if db is None:
         st.error("Não foi possível conectar ao banco de dados. Verifique sua conexão com a internet e as credenciais do MongoDB.")
         return
-
+    
     # Menu lateral
     with st.sidebar:
         st.title("🛒 Sistema de Vendas")
         st.markdown("---")
-        menu = st.radio("Menu", ["Clientes", "Produtos", "Vendas", "Relatórios"])
+        
+        menu = st.radio(
+            "Menu Principal",
+            ["👥 Clientes", "📦 Produtos", "💰 Vendas", "📊 Relatórios"],
+            index=0
+        )
+        
         st.markdown("---")
-        st.markdown(f"**Online desde:** {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-
-        if st.button("🔄 Atualizar Dados"):
+        st.markdown(f"**Data/Hora:** {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+        
+        if st.button("🔄 Atualizar Página", use_container_width=True):
             st.rerun()
-
+    
     # Navegação
-    if menu == "Clientes":
+    if menu == "👥 Clientes":
         modulo_clientes(db)
-    elif menu == "Produtos":
+    elif menu == "📦 Produtos":
         modulo_produtos(db)
-    elif menu == "Vendas":
+    elif menu == "💰 Vendas":
         modulo_vendas(db)
-    elif menu == "Relatórios":
+    elif menu == "📊 Relatórios":
         modulo_relatorios(db)
 
 if __name__ == "__main__":
