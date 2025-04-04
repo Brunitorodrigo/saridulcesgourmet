@@ -3,7 +3,6 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import os
-from flask import Flask
 from threading import Thread
 import schedule
 import time
@@ -11,11 +10,9 @@ import time
 # =============================================
 # CONFIGURAÇÃO PARA RODAR 24/7
 # =============================================
-app = Flask(__name__)
 
-@app.route('/')
-def home():
-    return "Sistema de Vendas Online - Ativo"
+
+
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
