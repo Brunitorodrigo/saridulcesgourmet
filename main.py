@@ -1386,7 +1386,7 @@ def modulo_relatorios(db):
 
 def main():
     st.set_page_config(
-        page_title="Sari Dulces IGEST",
+        page_title="Sari Dulces iGEST",
         page_icon="🛒",
         layout="wide",
         initial_sidebar_state="expanded"
@@ -1400,7 +1400,7 @@ def main():
     
     # Menu lateral
     with st.sidebar:
-        st.title("🛒 Sari Dulces IGEST")
+        st.title("🛒 Sari Dulces iGEST")
         st.markdown("---")
         
         menu = st.radio(
