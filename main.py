@@ -12,7 +12,7 @@ from bson.objectid import ObjectId
 # =============================================
 
 # Configuração da conexão (substitua pela sua URI do MongoDB Atlas)
-MONGO_URI = 'mongodb+srv://brunorodrigo:123Putao@cluster0.lrr3cgd.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0'
+MONGO_URI = MONGO_URI = 'mongodb+srv://brunorodrigo:123Putao@cluster0.lrr3cgd.mongodb.net/saridulces?retryWrites=true&w=majority'
 
 # Conexão segura com o MongoDB Atlas
 def get_database():
