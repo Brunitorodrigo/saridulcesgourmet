@@ -76,7 +76,7 @@ def verificar_credenciais(db, username, password):
     return None
 
 def pagina_login(db):
-    st.title("🔐 Login - Sistema de Vendas")
+    st.title("🔐 Login - Sari Dulces iGEST")
     
     with st.form("form_login"):
         username = st.text_input("Usuário", placeholder="Digite seu nome de usuário")
@@ -1631,7 +1631,7 @@ def modulo_relatorios(db):
 
 def main():
     st.set_page_config(
-        page_title="Sistema de Vendas",
+        page_title="Sari Dulces iGEST",
         page_icon="🛒",
         layout="wide",
         initial_sidebar_state="expanded"
@@ -1653,7 +1653,7 @@ def main():
     
     # Menu lateral (apenas para usuários autenticados)
     with st.sidebar:
-        st.title("🛒 Sistema de Vendas")
+        st.title("🛒 Sari Dulces iGEST")
         st.markdown(f"**Usuário:** {st.session_state.usuario_atual['nome']}")
         st.markdown(f"**Nível:** {st.session_state.usuario_atual['nivel_acesso'].capitalize()}")
         st.markdown("---")
