@@ -3,8 +3,6 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import os
-from threading import Thread
-import schedule
 import time
 
 # =============================================
@@ -12,18 +10,6 @@ import time
 # =============================================
 
 
-
-
-def run_flask():
-    app.run(host='0.0.0.0', port=8080)
-
-def keep_alive():
-    Thread(target=run_flask).start()
-
-def run_scheduler():
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
 
 def backup_db():
     """Função de backup"""
@@ -456,11 +442,11 @@ def modulo_relatorios(conn):
 # =============================================
 def main():
     # Inicia o servidor Flask em segundo plano
-    keep_alive()
+    
 
     # Agenda backups e inicia o scheduler em thread separada
-    schedule.every(6).hours.do(backup_db)
-    Thread(target=run_scheduler).start()
+    
+   
 
     # Configuração do Streamlit
     st.set_page_config(
