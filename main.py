@@ -1,91 +1,35 @@
-import sqlite3
 import streamlit as st
 import pandas as pd
 from datetime import datetime
 import os
 import time
+from pymongo import MongoClient
+import certifi
+from bson.objectid import ObjectId
 
 # =============================================
-# CONFIGURAÇÃO PARA RODAR 24/7
+# CONFIGURAÇÃO DO MONGODB ATLAS
 # =============================================
 
+# Configuração da conexão (substitua pela sua URI do MongoDB Atlas)
+MONGO_URI = st.secrets["mongodb"]["uri"]
 
-
-def backup_db():
-    """Função de backup"""
-    if os.path.exists('vendas.db'):
-        try:
-            backup_name = f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
-            os.rename('vendas.db', backup_name)
-            st.success(f"Backup criado: {backup_name}")
-        except Exception as e:
-            st.error(f"Erro no backup: {e}")
-
-# =============================================
-# CONFIGURAÇÃO DO BANCO DE DADOS
-# =============================================
-def criar_banco():
-    conn = sqlite3.connect('vendas.db', check_same_thread=False)
-    cursor = conn.cursor()
-
-    # Tabela Clientes
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS clientes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nome TEXT NOT NULL,
-        celular TEXT NOT NULL,
-        email TEXT,
-        endereco TEXT,
-        data_cadastro TEXT DEFAULT CURRENT_TIMESTAMP,
-        ativo INTEGER DEFAULT 1
-    )''')
-
-    # Tabela Produtos
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS produtos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nome TEXT NOT NULL,
-        descricao TEXT,
-        preco_venda REAL NOT NULL,
-        custo_producao REAL DEFAULT 0,
-        estoque INTEGER NOT NULL,
-        data_cadastro TEXT DEFAULT CURRENT_TIMESTAMP,
-        ativo INTEGER DEFAULT 1
-    )''')
-
-    # Tabela Vendas
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS vendas (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        cliente_id INTEGER NOT NULL,
-        data_venda TEXT DEFAULT CURRENT_TIMESTAMP,
-        valor_total REAL NOT NULL,
-        lucro_total REAL DEFAULT 0,
-        status TEXT DEFAULT 'finalizada',
-        FOREIGN KEY (cliente_id) REFERENCES clientes (id)
-    )''')
-
-    # Tabela Itens Venda
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS itens_venda (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        venda_id INTEGER NOT NULL,
-        produto_id INTEGER NOT NULL,
-        quantidade INTEGER NOT NULL,
-        preco_unitario REAL NOT NULL,
-        custo_unitario REAL NOT NULL,
-        FOREIGN KEY (venda_id) REFERENCES vendas (id),
-        FOREIGN KEY (produto_id) REFERENCES produtos (id)
-    )''')
-
-    conn.commit()
-    return conn
+# Conexão segura com o MongoDB Atlas
+def get_database():
+    try:
+        client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
+        db = client['sistema_vendas']
+        return db
+    except Exception as e:
+        st.error(f"Erro ao conectar ao MongoDB: {e}")
+        return None
 
 # =============================================
 # MÓDULO DE CLIENTES
 # =============================================
-def modulo_clientes(conn):
+def modulo_clientes(db):
     st.title("📋 Gestão de Clientes")
+    clientes_col = db['clientes']
 
     tab1, tab2 = st.tabs(["Cadastrar", "Listar/Editar"])
 
@@ -99,61 +43,73 @@ def modulo_clientes(conn):
 
             if st.form_submit_button("Salvar"):
                 if nome and celular:
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        """INSERT INTO clientes 
-                        (nome, celular, email, endereco) 
-                        VALUES (?, ?, ?, ?)""",
-                        (nome, celular, email, endereco)
-                    )
-                    conn.commit()
-                    st.success("Cliente cadastrado com sucesso!")
+                    novo_cliente = {
+                        "nome": nome,
+                        "celular": celular,
+                        "email": email,
+                        "endereco": endereco,
+                        "data_cadastro": datetime.now(),
+                        "ativo": True
+                    }
+                    try:
+                        clientes_col.insert_one(novo_cliente)
+                        st.success("Cliente cadastrado com sucesso!")
+                    except Exception as e:
+                        st.error(f"Erro ao cadastrar cliente: {e}")
                 else:
                     st.error("Campos obrigatórios (*) não preenchidos!")
 
     with tab2:
         st.subheader("Clientes Cadastrados")
-        df = pd.read_sql("SELECT * FROM clientes WHERE ativo = 1", conn)
+        clientes = list(clientes_col.find({"ativo": True}))
+        
+        if clientes:
+            df = pd.DataFrame(clientes)
+            # Remover colunas não necessárias para exibição
+            df = df.drop(columns=['_id', 'ativo'], errors='ignore')
+            st.dataframe(df, use_container_width=True)
 
-        # Edição de clientes
-        with st.expander("Editar Cliente"):
-            clientes = pd.read_sql("SELECT id, nome FROM clientes WHERE ativo = 1", conn)
-            cliente_selecionado = st.selectbox(
-                "Selecione o cliente",
-                clientes['id'],
-                format_func=lambda x: f"{x} - {clientes[clientes['id'] == x]['nome'].values[0]}"
-            )
+            # Edição de clientes
+            with st.expander("Editar Cliente"):
+                cliente_selecionado = st.selectbox(
+                    "Selecione o cliente",
+                    options=[str(cliente['_id']) for cliente in clientes],
+                    format_func=lambda x: f"{clientes_col.find_one({'_id': ObjectId(x)})['nome']} - {clientes_col.find_one({'_id': ObjectId(x)})['celular']}"
+                )
 
-            if cliente_selecionado:
-                dados_cliente = pd.read_sql(
-                    f"SELECT * FROM clientes WHERE id = {cliente_selecionado}", 
-                    conn
-                ).iloc[0]
+                if cliente_selecionado:
+                    dados_cliente = clientes_col.find_one({"_id": ObjectId(cliente_selecionado)})
 
-                with st.form("form_editar_cliente"):
-                    novo_nome = st.text_input("Nome", value=dados_cliente['nome'])
-                    novo_celular = st.text_input("Celular", value=dados_cliente['celular'])
-                    novo_email = st.text_input("Email", value=dados_cliente['email'])
-                    novo_endereco = st.text_area("Endereço", value=dados_cliente['endereco'])
+                    with st.form("form_editar_cliente"):
+                        novo_nome = st.text_input("Nome", value=dados_cliente.get('nome', ''))
+                        novo_celular = st.text_input("Celular", value=dados_cliente.get('celular', ''))
+                        novo_email = st.text_input("Email", value=dados_cliente.get('email', ''))
+                        novo_endereco = st.text_area("Endereço", value=dados_cliente.get('endereco', ''))
 
-                    if st.form_submit_button("Atualizar"):
-                        cursor = conn.cursor()
-                        cursor.execute(
-                            """UPDATE clientes SET
-                            nome = ?, celular = ?, email = ?, endereco = ?
-                            WHERE id = ?""",
-                            (novo_nome, novo_celular, novo_email, novo_endereco, cliente_selecionado)
-                        )
-                        conn.commit()
-                        st.success("Cliente atualizado!")
-
-        st.dataframe(df, use_container_width=True)
+                        if st.form_submit_button("Atualizar"):
+                            try:
+                                clientes_col.update_one(
+                                    {"_id": ObjectId(cliente_selecionado)},
+                                    {"$set": {
+                                        "nome": novo_nome,
+                                        "celular": novo_celular,
+                                        "email": novo_email,
+                                        "endereco": novo_endereco
+                                    }}
+                                )
+                                st.success("Cliente atualizado!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Erro ao atualizar cliente: {e}")
+        else:
+            st.info("Nenhum cliente cadastrado ainda.")
 
 # =============================================
 # MÓDULO DE PRODUTOS
 # =============================================
-def modulo_produtos(conn):
+def modulo_produtos(db):
     st.title("📦 Gestão de Produtos")
+    produtos_col = db['produtos']
 
     tab1, tab2 = st.tabs(["Cadastrar", "Listar/Editar"])
 
@@ -168,77 +124,94 @@ def modulo_produtos(conn):
 
             if st.form_submit_button("Salvar"):
                 if nome and preco and estoque >= 0:
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        """INSERT INTO produtos 
-                        (nome, descricao, preco_venda, custo_producao, estoque) 
-                        VALUES (?, ?, ?, ?, ?)""",
-                        (nome, descricao, preco, custo, estoque)
-                    )
-                    conn.commit()
-                    st.success("Produto cadastrado com sucesso!")
+                    novo_produto = {
+                        "nome": nome,
+                        "descricao": descricao,
+                        "preco_venda": preco,
+                        "custo_producao": custo,
+                        "estoque": estoque,
+                        "data_cadastro": datetime.now(),
+                        "ativo": True
+                    }
+                    try:
+                        produtos_col.insert_one(novo_produto)
+                        st.success("Produto cadastrado com sucesso!")
+                    except Exception as e:
+                        st.error(f"Erro ao cadastrar produto: {e}")
                 else:
                     st.error("Preencha os campos obrigatórios (*)")
 
     with tab2:
         st.subheader("Produtos Cadastrados")
-        df = pd.read_sql("SELECT * FROM produtos WHERE ativo = 1", conn)
+        produtos = list(produtos_col.find({"ativo": True}))
+        
+        if produtos:
+            df = pd.DataFrame(produtos)
+            # Remover colunas não necessárias para exibição
+            df = df.drop(columns=['_id', 'ativo'], errors='ignore')
+            st.dataframe(df, use_container_width=True)
 
-        with st.expander("Editar Produto"):
-            produtos = pd.read_sql("SELECT id, nome FROM produtos WHERE ativo = 1", conn)
-            produto_selecionado = st.selectbox(
-                "Selecione o produto",
-                produtos['id'],
-                format_func=lambda x: f"{x} - {produtos[produtos['id'] == x]['nome'].values[0]}"
-            )
+            # Edição de produtos
+            with st.expander("Editar Produto"):
+                produto_selecionado = st.selectbox(
+                    "Selecione o produto",
+                    options=[str(produto['_id']) for produto in produtos],
+                    format_func=lambda x: f"{produtos_col.find_one({'_id': ObjectId(x)})['nome']} - Estoque: {produtos_col.find_one({'_id': ObjectId(x)})['estoque']}"
+                )
 
-            if produto_selecionado:
-                dados_produto = pd.read_sql(
-                    f"SELECT * FROM produtos WHERE id = {produto_selecionado}", 
-                    conn
-                ).iloc[0]
+                if produto_selecionado:
+                    dados_produto = produtos_col.find_one({"_id": ObjectId(produto_selecionado)})
 
-                with st.form("form_editar_produto"):
-                    novo_nome = st.text_input("Nome", value=dados_produto['nome'])
-                    nova_descricao = st.text_area("Descrição", value=dados_produto['descricao'])
-                    novo_preco = st.number_input(
-                        "Preço", 
-                        min_value=0.0, 
-                        step=0.01, 
-                        value=float(dados_produto['preco_venda'])
-                    )
-                    novo_custo = st.number_input(
-                        "Custo", 
-                        min_value=0.0, 
-                        step=0.01, 
-                        value=float(dados_produto['custo_producao'])
-                    )
-                    novo_estoque = st.number_input(
-                        "Estoque", 
-                        min_value=0, 
-                        step=1, 
-                        value=int(dados_produto['estoque'])
-                    )
-
-                    if st.form_submit_button("Atualizar"):
-                        cursor = conn.cursor()
-                        cursor.execute(
-                            """UPDATE produtos SET
-                            nome = ?, descricao = ?, preco_venda = ?, 
-                            custo_producao = ?, estoque = ?
-                            WHERE id = ?""",
-                            (novo_nome, nova_descricao, novo_preco, novo_custo, novo_estoque, produto_selecionado)
+                    with st.form("form_editar_produto"):
+                        novo_nome = st.text_input("Nome", value=dados_produto.get('nome', ''))
+                        nova_descricao = st.text_area("Descrição", value=dados_produto.get('descricao', ''))
+                        novo_preco = st.number_input(
+                            "Preço", 
+                            min_value=0.0, 
+                            step=0.01, 
+                            value=float(dados_produto.get('preco_venda', 0))
                         )
-                        conn.commit()
-                        st.success("Produto atualizado!")
+                        novo_custo = st.number_input(
+                            "Custo", 
+                            min_value=0.0, 
+                            step=0.01, 
+                            value=float(dados_produto.get('custo_producao', 0))
+                        )
+                        novo_estoque = st.number_input(
+                            "Estoque", 
+                            min_value=0, 
+                            step=1, 
+                            value=int(dados_produto.get('estoque', 0))
+                        )
 
-        st.dataframe(df, use_container_width=True)
+                        if st.form_submit_button("Atualizar"):
+                            try:
+                                produtos_col.update_one(
+                                    {"_id": ObjectId(produto_selecionado)},
+                                    {"$set": {
+                                        "nome": novo_nome,
+                                        "descricao": nova_descricao,
+                                        "preco_venda": novo_preco,
+                                        "custo_producao": novo_custo,
+                                        "estoque": novo_estoque
+                                    }}
+                                )
+                                st.success("Produto atualizado!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Erro ao atualizar produto: {e}")
+        else:
+            st.info("Nenhum produto cadastrado ainda.")
 
 # =============================================
 # MÓDULO DE VENDAS
 # =============================================
-def modulo_vendas(conn):
+def modulo_vendas(db):
     st.title("💰 Gestão de Vendas")
+    vendas_col = db['vendas']
+    itens_venda_col = db['itens_venda']
+    clientes_col = db['clientes']
+    produtos_col = db['produtos']
 
     tab1, tab2 = st.tabs(["Nova Venda", "Histórico"])
 
@@ -246,34 +219,37 @@ def modulo_vendas(conn):
         st.subheader("Registrar Nova Venda")
 
         # Selecionar cliente
-        clientes = pd.read_sql("SELECT id, nome FROM clientes WHERE ativo = 1", conn)
+        clientes = list(clientes_col.find({"ativo": True}))
+        if not clientes:
+            st.warning("Nenhum cliente cadastrado!")
+            return
+
         cliente_id = st.selectbox(
             "Cliente*",
-            clientes['id'],
-            format_func=lambda x: f"{x} - {clientes[clientes['id'] == x]['nome'].values[0]}"
+            options=[str(cliente['_id']) for cliente in clientes],
+            format_func=lambda x: f"{clientes_col.find_one({'_id': ObjectId(x)})['nome']} - {clientes_col.find_one({'_id': ObjectId(x)})['celular']}"
         )
 
         # Adicionar produtos
-        produtos = pd.read_sql("SELECT id, nome, preco_venda, custo_producao, estoque FROM produtos WHERE ativo = 1 AND estoque > 0", conn)
-
-        if produtos.empty:
+        produtos = list(produtos_col.find({"ativo": True, "estoque": {"$gt": 0}}))
+        if not produtos:
             st.warning("Nenhum produto disponível em estoque!")
             return
 
-        itens_venda = []
-        col1, col2, col3 = st.columns(3)
+        itens_venda = st.session_state.get('itens_venda', [])
 
+        col1, col2, col3 = st.columns(3)
         with col1:
             produto_id = st.selectbox(
                 "Produto",
-                produtos['id'],
-                format_func=lambda x: f"{x} - {produtos[produtos['id'] == x]['nome'].values[0]}"
+                options=[str(produto['_id']) for produto in produtos],
+                format_func=lambda x: f"{produtos_col.find_one({'_id': ObjectId(x)})['nome']} - Estoque: {produtos_col.find_one({'_id': ObjectId(x)})['estoque']}"
             )
         with col2:
             quantidade = st.number_input("Quantidade", min_value=1, step=1, value=1)
         with col3:
             if st.button("Adicionar"):
-                produto = produtos[produtos['id'] == produto_id].iloc[0]
+                produto = produtos_col.find_one({"_id": ObjectId(produto_id)})
                 if quantidade > produto['estoque']:
                     st.error("Quantidade indisponível em estoque!")
                 else:
@@ -285,6 +261,7 @@ def modulo_vendas(conn):
                         'custo_unitario': produto['custo_producao'],
                         'subtotal': quantidade * produto['preco_venda']
                     })
+                    st.session_state['itens_venda'] = itens_venda
                     st.success("Produto adicionado!")
 
         # Lista de itens adicionados
@@ -298,8 +275,6 @@ def modulo_vendas(conn):
 
             if st.button("Finalizar Venda"):
                 try:
-                    cursor = conn.cursor()
-
                     # Calcula lucro total
                     lucro_total = sum(
                         (item['preco_unitario'] - item['custo_unitario']) * item['quantidade']
@@ -307,72 +282,121 @@ def modulo_vendas(conn):
                     )
 
                     # Insere venda
-                    cursor.execute(
-                        """INSERT INTO vendas 
-                        (cliente_id, valor_total, lucro_total) 
-                        VALUES (?, ?, ?)""",
-                        (cliente_id, total_venda, lucro_total)
-                    )
-                    venda_id = cursor.lastrowid
+                    nova_venda = {
+                        "cliente_id": cliente_id,
+                        "data_venda": datetime.now(),
+                        "valor_total": total_venda,
+                        "lucro_total": lucro_total,
+                        "status": "finalizada"
+                    }
+                    venda_id = vendas_col.insert_one(nova_venda).inserted_id
 
-                    # Insere itens da venda
+                    # Insere itens da venda e atualiza estoque
                     for item in itens_venda:
-                        cursor.execute(
-                            """INSERT INTO itens_venda 
-                            (venda_id, produto_id, quantidade, preco_unitario, custo_unitario) 
-                            VALUES (?, ?, ?, ?, ?)""",
-                            (venda_id, item['produto_id'], item['quantidade'], 
-                             item['preco_unitario'], item['custo_unitario'])
-                        )
+                        # Insere item
+                        itens_venda_col.insert_one({
+                            "venda_id": str(venda_id),
+                            "produto_id": item['produto_id'],
+                            "quantidade": item['quantidade'],
+                            "preco_unitario": item['preco_unitario'],
+                            "custo_unitario": item['custo_unitario']
+                        })
 
                         # Atualiza estoque
-                        cursor.execute(
-                            "UPDATE produtos SET estoque = estoque - ? WHERE id = ?",
-                            (item['quantidade'], item['produto_id'])
+                        produtos_col.update_one(
+                            {"_id": ObjectId(item['produto_id'])},
+                            {"$inc": {"estoque": -item['quantidade']}}
                         )
 
-                    conn.commit()
                     st.success("Venda registrada com sucesso!")
                     st.balloons()
+                    # Limpa os itens da venda após finalizar
+                    del st.session_state['itens_venda']
+                    st.rerun()
                 except Exception as e:
-                    conn.rollback()
                     st.error(f"Erro ao registrar venda: {e}")
 
     with tab2:
         st.subheader("Histórico de Vendas")
-        vendas = pd.read_sql("""
-            SELECT v.id, c.nome as cliente, v.data_venda, v.valor_total, v.lucro_total 
-            FROM vendas v
-            JOIN clientes c ON v.cliente_id = c.id
-            ORDER BY v.data_venda DESC
-        """, conn)
+        pipeline = [
+            {
+                "$lookup": {
+                    "from": "clientes",
+                    "localField": "cliente_id",
+                    "foreignField": "_id",
+                    "as": "cliente"
+                }
+            },
+            {"$unwind": "$cliente"},
+            {"$sort": {"data_venda": -1}}
+        ]
+        vendas = list(vendas_col.aggregate(pipeline))
+        
+        if vendas:
+            # Prepara dados para exibição
+            vendas_data = []
+            for venda in vendas:
+                vendas_data.append({
+                    "id": str(venda['_id']),
+                    "cliente": venda['cliente']['nome'],
+                    "data_venda": venda['data_venda'],
+                    "valor_total": venda['valor_total'],
+                    "lucro_total": venda['lucro_total']
+                })
+            
+            df_vendas = pd.DataFrame(vendas_data)
+            st.dataframe(df_vendas, use_container_width=True)
 
-        st.dataframe(vendas, use_container_width=True)
-
-        # Detalhes da venda selecionada
-        if not vendas.empty:
+            # Detalhes da venda selecionada
             venda_selecionada = st.selectbox(
                 "Selecione uma venda para detalhar",
-                vendas['id'],
-                format_func=lambda x: f"Venda {x} - {vendas[vendas['id'] == x]['cliente'].values[0]} - R$ {vendas[vendas['id'] == x]['valor_total'].values[0]:.2f}"
+                options=[venda['id'] for venda in vendas_data],
+                format_func=lambda x: f"Venda {x} - {next(v['cliente'] for v in vendas_data if v['id'] == x)} - R$ {next(v['valor_total'] for v in vendas_data if v['id'] == x):.2f}"
             )
 
             if venda_selecionada:
-                detalhes_venda = pd.read_sql(f"""
-                    SELECT p.nome as produto, iv.quantidade, iv.preco_unitario, 
-                           (iv.quantidade * iv.preco_unitario) as subtotal
-                    FROM itens_venda iv
-                    JOIN produtos p ON iv.produto_id = p.id
-                    WHERE iv.venda_id = {venda_selecionada}
-                """, conn)
-
-                st.dataframe(detalhes_venda)
+                # Busca itens da venda
+                pipeline_itens = [
+                    {
+                        "$match": {"venda_id": venda_selecionada}
+                    },
+                    {
+                        "$lookup": {
+                            "from": "produtos",
+                            "localField": "produto_id",
+                            "foreignField": "_id",
+                            "as": "produto"
+                        }
+                    },
+                    {
+                        "$unwind": "$produto"
+                    }
+                ]
+                itens = list(itens_venda_col.aggregate(pipeline_itens))
+                
+                if itens:
+                    itens_data = []
+                    for item in itens:
+                        itens_data.append({
+                            "produto": item['produto']['nome'],
+                            "quantidade": item['quantidade'],
+                            "preco_unitario": item['preco_unitario'],
+                            "subtotal": item['quantidade'] * item['preco_unitario']
+                        })
+                    
+                    st.dataframe(pd.DataFrame(itens_data))
+        else:
+            st.info("Nenhuma venda registrada ainda.")
 
 # =============================================
 # MÓDULO DE RELATÓRIOS
 # =============================================
-def modulo_relatorios(conn):
+def modulo_relatorios(db):
     st.title("📊 Relatórios")
+    vendas_col = db['vendas']
+    produtos_col = db['produtos']
+    clientes_col = db['clientes']
+    itens_venda_col = db['itens_venda']
 
     tab1, tab2, tab3 = st.tabs(["Vendas", "Produtos", "Clientes"])
 
@@ -386,68 +410,125 @@ def modulo_relatorios(conn):
             data_fim = st.date_input("Data Fim")
 
         if st.button("Gerar Relatório"):
-            vendas = pd.read_sql(f"""
-                SELECT v.id, c.nome as cliente, v.data_venda, v.valor_total, v.lucro_total
-                FROM vendas v
-                JOIN clientes c ON v.cliente_id = c.id
-                WHERE date(v.data_venda) BETWEEN '{data_inicio}' AND '{data_fim}'
-                ORDER BY v.data_venda
-            """, conn)
-
-            if not vendas.empty:
-                st.dataframe(vendas)
+            pipeline = [
+                {
+                    "$match": {
+                        "data_venda": {
+                            "$gte": datetime.combine(data_inicio, datetime.min.time()),
+                            "$lte": datetime.combine(data_fim, datetime.max.time())
+                        }
+                    }
+                },
+                {
+                    "$lookup": {
+                        "from": "clientes",
+                        "localField": "cliente_id",
+                        "foreignField": "_id",
+                        "as": "cliente"
+                    }
+                },
+                {
+                    "$unwind": "$cliente"
+                },
+                {
+                    "$sort": {"data_venda": 1}
+                }
+            ]
+            vendas = list(vendas_col.aggregate(pipeline))
+            
+            if vendas:
+                vendas_data = []
+                for venda in vendas:
+                    vendas_data.append({
+                        "id": str(venda['_id']),
+                        "cliente": venda['cliente']['nome'],
+                        "data_venda": venda['data_venda'],
+                        "valor_total": venda['valor_total'],
+                        "lucro_total": venda['lucro_total']
+                    })
+                
+                df_vendas = pd.DataFrame(vendas_data)
+                st.dataframe(df_vendas)
 
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.metric("Total de Vendas", f"R$ {vendas['valor_total'].sum():.2f}")
+                    st.metric("Total de Vendas", f"R$ {df_vendas['valor_total'].sum():.2f}")
                 with col2:
-                    st.metric("Lucro Total", f"R$ {vendas['lucro_total'].sum():.2f}")
+                    st.metric("Lucro Total", f"R$ {df_vendas['lucro_total'].sum():.2f}")
 
-                st.bar_chart(vendas.set_index('data_venda')['valor_total'])
+                st.bar_chart(df_vendas.set_index('data_venda')['valor_total'])
             else:
                 st.warning("Nenhuma venda no período selecionado")
 
     with tab2:
         st.subheader("Relatório de Produtos")
-        produtos = pd.read_sql("""
-            SELECT p.nome, p.estoque, 
-                   SUM(CASE WHEN iv.id IS NOT NULL THEN iv.quantidade ELSE 0 END) as vendidos,
-                   p.preco_venda, p.custo_producao
-            FROM produtos p
-            LEFT JOIN itens_venda iv ON p.id = iv.produto_id
-            GROUP BY p.id
-        """, conn)
-
-        produtos['lucro'] = (produtos['preco_venda'] - produtos['custo_producao']) * produtos['vendidos']
-
-        st.dataframe(produtos)
-        st.bar_chart(produtos.set_index('nome')['vendidos'])
+        pipeline = [
+            {
+                "$lookup": {
+                    "from": "itens_venda",
+                    "localField": "_id",
+                    "foreignField": "produto_id",
+                    "as": "itens_venda"
+                }
+            },
+            {
+                "$project": {
+                    "nome": 1,
+                    "estoque": 1,
+                    "preco_venda": 1,
+                    "custo_producao": 1,
+                    "vendidos": {"$sum": "$itens_venda.quantidade"},
+                    "lucro": {
+                        "$multiply": [
+                            {"$subtract": ["$preco_venda", "$custo_producao"]},
+                            {"$sum": "$itens_venda.quantidade"}
+                        ]
+                    }
+                }
+            }
+        ]
+        produtos = list(produtos_col.aggregate(pipeline))
+        
+        if produtos:
+            df_produtos = pd.DataFrame(produtos)
+            st.dataframe(df_produtos)
+            st.bar_chart(df_produtos.set_index('nome')['vendidos'])
+        else:
+            st.info("Nenhum produto com vendas registradas.")
 
     with tab3:
         st.subheader("Relatório de Clientes")
-        clientes = pd.read_sql("""
-            SELECT c.nome, c.celular, 
-                   COUNT(v.id) as total_compras,
-                   SUM(v.valor_total) as total_gasto
-            FROM clientes c
-            LEFT JOIN vendas v ON c.id = v.cliente_id
-            GROUP BY c.id
-        """, conn)
-
-        st.dataframe(clientes)
-        st.bar_chart(clientes.set_index('nome')['total_gasto'])
+        pipeline = [
+            {
+                "$lookup": {
+                    "from": "vendas",
+                    "localField": "_id",
+                    "foreignField": "cliente_id",
+                    "as": "vendas"
+                }
+            },
+            {
+                "$project": {
+                    "nome": 1,
+                    "celular": 1,
+                    "total_compras": {"$size": "$vendas"},
+                    "total_gasto": {"$sum": "$vendas.valor_total"}
+                }
+            }
+        ]
+        clientes = list(clientes_col.aggregate(pipeline))
+        
+        if clientes:
+            df_clientes = pd.DataFrame(clientes)
+            st.dataframe(df_clientes)
+            st.bar_chart(df_clientes.set_index('nome')['total_gasto'])
+        else:
+            st.info("Nenhum cliente com compras registradas.")
 
 # =============================================
 # FUNÇÃO PRINCIPAL
 # =============================================
 def main():
-    # Inicia o servidor Flask em segundo plano
-    
-
-    # Agenda backups e inicia o scheduler em thread separada
-    
-   
-
     # Configuração do Streamlit
     st.set_page_config(
         page_title="Sistema de Vendas", 
@@ -455,8 +536,11 @@ def main():
         page_icon="🛒"
     )
 
-    # Conexão com o banco de dados
-    conn = criar_banco()
+    # Conexão com o MongoDB Atlas
+    db = get_database()
+    if db is None:
+        st.error("Não foi possível conectar ao banco de dados. Verifique sua conexão com a internet e as credenciais do MongoDB.")
+        return
 
     # Menu lateral
     with st.sidebar:
@@ -467,28 +551,17 @@ def main():
         st.markdown(f"**Online desde:** {datetime.now().strftime('%d/%m/%Y %H:%M')}")
 
         if st.button("🔄 Atualizar Dados"):
-            st.cache_data.clear()
             st.rerun()
-
-        if st.button("💾 Criar Backup"):
-            backup_db()
 
     # Navegação
     if menu == "Clientes":
-        modulo_clientes(conn)
+        modulo_clientes(db)
     elif menu == "Produtos":
-        modulo_produtos(conn)
+        modulo_produtos(db)
     elif menu == "Vendas":
-        modulo_vendas(conn)
+        modulo_vendas(db)
     elif menu == "Relatórios":
-        modulo_relatorios(conn)
-
-    # Fechar conexão
-    conn.close()
+        modulo_relatorios(db)
 
 if __name__ == "__main__":
-    # Para desenvolvimento: recria o banco se necessário
-    if os.path.exists('vendas.db'):
-        os.remove('vendas.db')
-
     main()
