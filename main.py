@@ -1523,10 +1523,14 @@ def modulo_relatorios(db):
                 st.subheader("📊 Indicadores de Desempenho")
                 
                 # Comparativo com período anterior
+                # Calcula a diferença de dias entre data_fim e data_inicio
+                dias_periodo = (data_fim - data_inicio).days
+
+                # Define o período anterior com a mesma duração do período atual
                 periodo_anterior = {
-                    "$gte": datetime.combine(data_inicio - timedelta(days=(data_fim - data_inicio).days), 
-                    "$lte": datetime.combine(data_inicio - timedelta(days=1), 
-                }
+                            "$gte": datetime.combine(data_inicio - timedelta(days=dias_periodo), datetime.min.time()),
+                        "$lte": datetime.combine(data_inicio - timedelta(days=1), datetime.max.time())
+                                        }
                 
                 faturamento_anterior = next(vendas_col.aggregate([
                     {"$match": {"data_venda": periodo_anterior, "status": "concluída"}},
