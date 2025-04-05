@@ -421,7 +421,7 @@ def modulo_clientes(db):
                     "Total Gasto": st.column_config.NumberColumn(format="R$ %.2f"),
                     "Ações": st.column_config.SelectboxColumn(
                         "Ações",
-                        options=["Manter", "Editar", "Inativar"],
+                        options=["Manter", "Editar", "Inativar", "Excluir"],
                         required=True
                     )
                 },
@@ -430,16 +430,46 @@ def modulo_clientes(db):
                 key="editor_clientes"
             )
             
-            if not edited_df[edited_df['Ações'] == "Inativar"].empty:
-                st.warning("⚠️ Atenção: Esta ação marcará o cliente como inativo!")
-                if st.button("Confirmar Inativação", type="primary"):
-                    for idx, row in edited_df[edited_df['Ações'] == "Inativar"].iterrows():
-                        clientes_col.update_one(
-                            {"_id": ObjectId(row['ID'])},
-                            {"$set": {"status": "inativo"}}
-                        )
-                    st.success("Clientes inativados com sucesso!")
-                    st.rerun()
+            # Processar ações selecionadas
+            if not edited_df[edited_df['Ações'] != "Manter"].empty:
+                st.warning("⚠️ Atenção: Ações em massa serão aplicadas!")
+                
+                col1, col2 = st.columns(2)
+                
+                # Ação de inativar
+                if not edited_df[edited_df['Ações'] == "Inativar"].empty:
+                    with col1:
+                        if st.button("Confirmar Inativação", key="btn_inativar_clientes"):
+                            for idx, row in edited_df[edited_df['Ações'] == "Inativar"].iterrows():
+                                clientes_col.update_one(
+                                    {"_id": ObjectId(row['ID'])},
+                                    {"$set": {"status": "inativo"}}
+                                )
+                            st.success("Clientes inativados com sucesso!")
+                            st.rerun()
+                
+                # Ação de excluir
+                if not edited_df[edited_df['Ações'] == "Excluir"].empty:
+                    with col2:
+                        if st.button("Confirmar Exclusão", type="primary", key="btn_excluir_clientes"):
+                            # Verificar se há vendas associadas aos clientes
+                            clientes_para_excluir = edited_df[edited_df['Ações'] == "Excluir"]
+                            tem_vendas = False
+                            
+                            for idx, row in clientes_para_excluir.iterrows():
+                                cliente_id = row['ID']
+                                # Verificar se existem vendas associadas
+                                if db['vendas'].count_documents({"cliente_id": cliente_id}) > 0:
+                                    tem_vendas = True
+                                    break
+                            
+                            if tem_vendas:
+                                st.error("Alguns clientes possuem vendas associadas e não podem ser excluídos!")
+                            else:
+                                for idx, row in clientes_para_excluir.iterrows():
+                                    clientes_col.delete_one({"_id": ObjectId(row['ID'])})
+                                st.success("Clientes excluídos com sucesso!")
+                                st.rerun()
 
 # =============================================
 # MÓDULO DE PRODUTOS
