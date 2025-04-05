@@ -517,7 +517,7 @@ def modulo_produtos(db):
                     ),
                     "Ações": st.column_config.SelectboxColumn(
                         "Ações",
-                        options=["Manter", "Editar", "Inativar"],
+                        options=["Manter", "Editar", "Inativar", "Excluir"],
                         required=True
                     )
                 },
@@ -526,16 +526,46 @@ def modulo_produtos(db):
                 key="editor_produtos"
             )
             
-            if not edited_df[edited_df['Ações'] == "Inativar"].empty:
-                st.warning("⚠️ Atenção: Esta ação marcará o produto como inativo!")
-                if st.button("Confirmar Inativação", type="primary"):
-                    for idx, row in edited_df[edited_df['Ações'] == "Inativar"].iterrows():
-                        produtos_col.update_one(
-                            {"_id": ObjectId(row['ID'])},
-                            {"$set": {"ativo": False}}
-                        )
-                    st.success("Produtos inativados com sucesso!")
-                    st.rerun()
+            # Processar ações selecionadas
+            if not edited_df[edited_df['Ações'] != "Manter"].empty:
+                st.warning("⚠️ Atenção: Ações em massa serão aplicadas!")
+                
+                col1, col2 = st.columns(2)
+                
+                # Ação de inativar
+                if not edited_df[edited_df['Ações'] == "Inativar"].empty:
+                    with col1:
+                        if st.button("Confirmar Inativação", key="btn_inativar_produtos"):
+                            for idx, row in edited_df[edited_df['Ações'] == "Inativar"].iterrows():
+                                produtos_col.update_one(
+                                    {"_id": ObjectId(row['ID'])},
+                                    {"$set": {"ativo": False}}
+                                )
+                            st.success("Produtos inativados com sucesso!")
+                            st.rerun()
+                
+                # Ação de excluir
+                if not edited_df[edited_df['Ações'] == "Excluir"].empty:
+                    with col2:
+                        if st.button("Confirmar Exclusão", type="primary", key="btn_excluir_produtos"):
+                            # Verificar se há vendas associadas aos produtos
+                            produtos_para_excluir = edited_df[edited_df['Ações'] == "Excluir"]
+                            tem_vendas = False
+                            
+                            for idx, row in produtos_para_excluir.iterrows():
+                                produto_id = row['ID']
+                                # Verificar se existem itens de venda associados
+                                if db['itens_venda'].count_documents({"produto_id": produto_id}) > 0:
+                                    tem_vendas = True
+                                    break
+                            
+                            if tem_vendas:
+                                st.error("Alguns produtos possuem vendas associadas e não podem ser excluídos!")
+                            else:
+                                for idx, row in produtos_para_excluir.iterrows():
+                                    produtos_col.delete_one({"_id": ObjectId(row['ID'])})
+                                st.success("Produtos excluídos com sucesso!")
+                                st.rerun()
 
     with tab2:
         st.subheader("Cadastro de Produto")
