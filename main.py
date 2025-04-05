@@ -16,7 +16,7 @@ import time
 # CONFIGURAÇÃO DO MONGODB ATLAS
 # =============================================
 
-
+MONGO_URI = 'mongodb+srv://brunorodrigo:123Putao@cluster0.lrr3cgd.mongodb.net/saridulces?retryWrites=true&w=majority&readPreference=primaryPreferred'
 
 def get_database(max_retries=3):
     for attempt in range(max_retries):
