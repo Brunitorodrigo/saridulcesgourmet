@@ -8,45 +8,34 @@ from bson.objectid import ObjectId
 import hashlib
 import base64
 from io import BytesIO
+import os
 
 # =============================================
 # CONFIGURAÇÃO DO MONGODB ATLAS
 # =============================================
 
-MONGO_URI = 'mongodb+srv://brunorodrigo:123Putao@cluster0.lrr3cgd.mongodb.net/saridulces?retryWrites=true&w=majority&directConnection=true'
+MONGO_URI = os.getenv('MONGO_URI', 'mongodb+srv://brunorodrigo:123Putao@cluster0.lrr3cgd.mongodb.net/saridulces?retryWrites=true&w=majority')
 
 def get_database():
     try:
-        # Configuração otimizada para o MongoDB Atlas
         client = MongoClient(
             MONGO_URI,
             tlsCAFile=certifi.where(),
-            connectTimeoutMS=30000,
+            connectTimeoutMS=10000,
             socketTimeoutMS=30000,
-            serverSelectionTimeoutMS=5000,
+            serverSelectionTimeoutMS=10000,
             retryWrites=True,
-            retryReads=True,
-            connect=False,  # Adicionado para melhorar a estabilidade
-            appname="SariDulcesApp"  # Identificação da aplicação
+            retryReads=True
         )
         
-        # Teste de conexão com timeout ajustado
+        # Teste de conexão rápido
         client.admin.command('ping')
-        
-        db = client.get_database()
-        
-        # Verifica e cria coleções se necessário (seu código existente)
-        required_collections = ['clientes', 'produtos', 'vendas', 'itens_venda', 'configuracoes', 'usuarios']
-        for coll in required_collections:
-            if coll not in db.list_collection_names():
-                db.create_collection(coll)
-                
-        return db
+        return client.saridulces
         
     except Exception as e:
-        st.error(f"Falha na conexão com o MongoDB: {str(e)}")
-        st.error("Verifique sua conexão com a internet e as credenciais.")
-        st.error("Se o problema persistir, entre em contato com o suporte técnico.")
+        st.error("Falha na conexão com o banco de dados")
+        st.error(str(e))
+        st.stop()
         st.stop()
 
 # =============================================
