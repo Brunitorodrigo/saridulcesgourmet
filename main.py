@@ -14,28 +14,32 @@ import os
 # CONFIGURAÇÃO DO MONGODB ATLAS
 # =============================================
 
-MONGO_URI = os.getenv('MONGO_URI', 'mongodb+srv://brunorodrigo:123Putao@cluster0.lrr3cgd.mongodb.net/saridulces?retryWrites=true&w=majority')
+MONGO_URI = 'mongodb+srv://brunorodrigo:123Putao@cluster0.lrr3cgd.mongodb.net/saridulces?retryWrites=true&w=majority&connectTimeoutMS=30000&socketTimeoutMS=30000'
 
 def get_database():
     try:
         client = MongoClient(
             MONGO_URI,
             tlsCAFile=certifi.where(),
-            connectTimeoutMS=10000,
+            serverSelectionTimeoutMS=30000,  # 30 segundos
+            connectTimeoutMS=30000,
             socketTimeoutMS=30000,
-            serverSelectionTimeoutMS=10000,
             retryWrites=True,
-            retryReads=True
+            retryReads=True,
+            heartbeatFrequencyMS=10000  # Mantém a conexão ativa
         )
         
-        # Teste de conexão rápido
-        client.admin.command('ping')
-        return client.saridulces
+        # Força a descoberta dos membros do replica set
+        client.admin.command('ismaster')
+        
+        db = client.saridulces
+        return db
         
     except Exception as e:
-        st.error("Falha na conexão com o banco de dados")
-        st.error(str(e))
-        st.stop()
+        st.error(f"Falha crítica na conexão: {str(e)}")
+        st.error("1. Verifique sua conexão com a internet")
+        st.error("2. Confira as permissões no MongoDB Atlas")
+        st.error("3. O cluster pode estar em manutenção")
         st.stop()
 
 # =============================================
