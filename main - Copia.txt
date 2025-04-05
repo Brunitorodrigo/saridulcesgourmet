@@ -1,4 +1,3 @@
-import delivery_module # Adicione esta linha
 import streamlit as st
 import pandas as pd
 from datetime import datetime, date, timedelta
@@ -895,7 +894,7 @@ def modulo_vendas(db):
                 st.rerun()
             
             # Calcula totais
-            total_venda = sum(item['subtotal'] for item in st.session_state.itens_venda) + float(custo_entrega)
+            total_venda = sum(item['subtotal'] for item in st.session_state.itens_venda)
             lucro_estimado = sum(
                 (item['preco_unitario'] - item['custo_unitario']) * item['quantidade']
                 for item in st.session_state.itens_venda
@@ -958,30 +957,7 @@ def modulo_vendas(db):
                 comprovante = st.file_uploader("Envie o comprovante (opcional)", type=["jpg", "png", "pdf"])
                 if comprovante:
                     detalhes_pagamento["comprovante"] = "Enviado"
-         # Adicionar campo de custo de entrega após os métodos de pagamento
-            with st.expander("🚚 Opções de Entrega", expanded=True):
-                tipo_entrega = st.radio(
-            "Tipo de Entrega*",
-            ["Retirada na Loja", "Entrega ao Cliente"],
-                    index=0,
-                    horizontal=True
-        )
-        
-        custo_entrega = st.number_input(
-            "Custo da Entrega (R$)",
-            min_value=0.0,
-            value=0.0,
-            step=0.01,
-            format="%.2f",
-            disabled=(tipo_entrega == "Retirada na Loja")
-        )
-        
-        if tipo_entrega == "Entrega ao Cliente":
-            st.write("**Endereço para Entrega:**")
-            if cliente and "endereco" in cliente and cliente["endereco"]:
-                st.write(cliente["endereco"])
-            else:
-                st.warning("Cliente não possui endereço cadastrado!")   
+            
             # Finalização da venda
             if st.button("✅ Finalizar Venda", type="primary", use_container_width=True):
                 try:
@@ -995,9 +971,7 @@ def modulo_vendas(db):
                             "status": "concluída",
                             "itens_count": len(st.session_state.itens_venda),
                             "metodo_pagamento": metodo_pagamento.lower(),
-                            "detalhes_pagamento": detalhes_pagamento,
-                            "custo_entrega": float(custo_entrega),
-                            "tipo_entrega": tipo_entrega.lower().replace(" ", "_")
+                            "detalhes_pagamento": detalhes_pagamento
                         }
                         
                         # Insere a venda e obtém o ID
@@ -1418,7 +1392,7 @@ def modulo_vendas(db):
                         st.warning("Nenhum dado para exportar")
             except Exception as e:
                 st.error(f"Erro ao gerar relatório: {str(e)}")
-                # =============================================
+# =============================================
 # MÓDULO DE ENTREGAS
 # =============================================
 
@@ -2311,7 +2285,7 @@ def main():
         st.markdown(f"**Nível:** {st.session_state.usuario_atual['nivel_acesso'].capitalize()}")
         st.markdown("---")
         
-        opcoes_menu = ["👥 Clientes", "📦 Produtos", "💰 Vendas","🚚 Entregas", "📊 Relatórios"]
+        opcoes_menu = ["👥 Clientes", "📦 Produtos", "💰 Vendas", "📊 Relatórios"]
         
         # Adiciona gestão de usuários apenas para administradores
         if st.session_state.usuario_atual['nivel_acesso'] in ['admin', 'gerente']:
@@ -2347,8 +2321,6 @@ def main():
         modulo_produtos(db)
     elif menu == "💰 Vendas":
         modulo_vendas(db)
-    elif menu == "🚚 Entregas": # Adicione este bloco
-        modulo_entregas(db)   # Chama a nova função que criaremos
     elif menu == "📊 Relatórios":
         modulo_relatorios(db)
     elif menu == "👨‍💼 Usuários":
