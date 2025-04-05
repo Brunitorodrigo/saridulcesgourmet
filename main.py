@@ -1,7 +1,7 @@
 import delivery_module # Adicione esta linha
 import streamlit as st
 import pandas as pd
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, time
 import time as pytime
 from pymongo import MongoClient
 from pymongo.errors import AutoReconnect, ConnectionFailure, ServerSelectionTimeoutError
