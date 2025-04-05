@@ -17,40 +17,36 @@ MONGO_URI = 'mongodb+srv://brunorodrigo:123Putao@cluster0.lrr3cgd.mongodb.net/sa
 
 def get_database():
     try:
+        # Configuração otimizada para o MongoDB Atlas
         client = MongoClient(
             MONGO_URI,
             tlsCAFile=certifi.where(),
-            serverSelectionTimeoutMS=5000,
             connectTimeoutMS=30000,
-            socketTimeoutMS=30000
+            socketTimeoutMS=30000,
+            serverSelectionTimeoutMS=5000,
+            retryWrites=True,
+            retryReads=True,
+            connect=False,  # Adicionado para melhorar a estabilidade
+            appname="SariDulcesApp"  # Identificação da aplicação
         )
         
+        # Teste de conexão com timeout ajustado
         client.admin.command('ping')
+        
         db = client.get_database()
         
+        # Verifica e cria coleções se necessário (seu código existente)
         required_collections = ['clientes', 'produtos', 'vendas', 'itens_venda', 'configuracoes', 'usuarios']
         for coll in required_collections:
             if coll not in db.list_collection_names():
                 db.create_collection(coll)
-                
-                # Cria usuário admin padrão se a coleção for nova
-                if coll == 'usuarios':
-                    db.usuarios.insert_one({
-                        "username": "admin",
-                        "password_hash": hashlib.sha256("admin123".encode()).hexdigest(),
-                        "nome": "Administrador",
-                        "email": "admin@sistema.com",
-                        "nivel_acesso": "admin",
-                        "data_criacao": datetime.now(),
-                        "ultimo_login": None,
-                        "ativo": True
-                    })
                 
         return db
         
     except Exception as e:
         st.error(f"Falha na conexão com o MongoDB: {str(e)}")
         st.error("Verifique sua conexão com a internet e as credenciais.")
+        st.error("Se o problema persistir, entre em contato com o suporte técnico.")
         st.stop()
 
 # =============================================
