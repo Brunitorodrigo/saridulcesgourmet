@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime, date, timedelta
 import time as pytime
 from pymongo import MongoClient
+from pymongo.errors import AutoReconnect, ConnectionFailure, ServerSelectionTimeoutError
 import certifi
 from bson.objectid import ObjectId
 import hashlib
@@ -17,31 +18,40 @@ import os
 MONGO_URI = 'mongodb+srv://brunorodrigo:123Putao@cluster0.lrr3cgd.mongodb.net/saridulces?retryWrites=true&w=majority&connectTimeoutMS=30000&socketTimeoutMS=30000'
 
 def get_database():
-    try:
-        client = MongoClient(
-            MONGO_URI,
-            tlsCAFile=certifi.where(),
-            serverSelectionTimeoutMS=30000,  # 30 segundos
-            connectTimeoutMS=30000,
-            socketTimeoutMS=30000,
-            retryWrites=True,
-            retryReads=True,
-            heartbeatFrequencyMS=10000  # Mantém a conexão ativa
-        )
-        
-        # Força a descoberta dos membros do replica set
-        client.admin.command('ismaster')
-        
-        db = client.saridulces
-        return db
-        
-    except Exception as e:
-        st.error(f"Falha crítica na conexão: {str(e)}")
-        st.error("1. Verifique sua conexão com a internet")
-        st.error("2. Confira as permissões no MongoDB Atlas")
-        st.error("3. O cluster pode estar em manutenção")
-        st.stop()
-
+    max_retries = 3
+    retry_delay = 1  # segundos
+    
+    for attempt in range(max_retries):
+        try:
+            client = MongoClient(
+                MONGO_URI,
+                tlsCAFile=certifi.where(),
+                serverSelectionTimeoutMS=10000,
+                connectTimeoutMS=10000,
+                socketTimeoutMS=30000,
+                retryWrites=True,
+                retryReads=True
+            )
+            
+            # Teste de conexão
+            client.admin.command('ping')
+            db = client.saridulces
+            
+            st.session_state.db_connection = db  # Armazena a conexão na sessão
+            return db
+            
+        except (AutoReconnect, ConnectionFailure, ServerSelectionTimeoutError) as e:
+            if attempt == max_retries - 1:  # Última tentativa
+                st.error(f"Falha na conexão após {max_retries} tentativas: {str(e)}")
+                st.error("O sistema não pode conectar ao banco de dados no momento.")
+                st.stop()
+            
+            st.warning(f"Tentativa {attempt + 1} de {max_retries} - Reconectando...")
+            time.sleep(retry_delay * (attempt + 1))  # Backoff exponencial
+            
+        except Exception as e:
+            st.error(f"Erro inesperado: {str(e)}")
+            st.stop()
 # =============================================
 # SISTEMA DE AUTENTICAÇÃO
 # =============================================
