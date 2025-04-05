@@ -2,7 +2,7 @@ import delivery_module # Adicione esta linha
 import streamlit as st
 import pandas as pd
 from datetime import datetime, date, timedelta, time
-import time as pytime
+import time as module_time
 from pymongo import MongoClient
 from pymongo.errors import AutoReconnect, ConnectionFailure, ServerSelectionTimeoutError
 import certifi
@@ -94,7 +94,7 @@ def pagina_login(db):
                 )
                 
                 st.success(f"Bem-vindo, {usuario['nome']}!")
-                pytime.sleep(1)
+                module_time.sleep(1)
                 st.rerun()
             else:
                 st.session_state.tentativas_login += 1
@@ -150,7 +150,7 @@ def alterar_senha(db):
             
             st.success("Senha alterada com sucesso!")
             st.balloons()
-            pytime.sleep(2)
+            module_time.sleep(2)
             st.session_state.pagina_atual = "menu"
             st.rerun()
     
@@ -268,7 +268,7 @@ def modulo_usuarios(db):
                             db.usuarios.insert_one(novo_usuario)
                             st.success("Usuário cadastrado com sucesso!")
                             st.balloons()
-                            pytime.sleep(1.5)
+                            module_time.sleep(1.5)
                             st.rerun()
                         except Exception as e:
                             st.error(f"Erro ao cadastrar usuário: {str(e)}")
@@ -358,7 +358,7 @@ def modulo_clientes(db):
                         clientes_col.insert_one(novo_cliente)
                         st.success("Cliente cadastrado com sucesso!")
                         st.balloons()
-                        pytime.sleep(1.5)
+                        module_time.sleep(1.5)
                         st.rerun()
                     except Exception as e:
                         st.error(f"Erro ao cadastrar cliente: {str(e)}")
@@ -635,7 +635,7 @@ def modulo_produtos(db):
                         produtos_col.insert_one(novo_produto)
                         st.success("Produto cadastrado com sucesso!")
                         st.balloons()
-                        pytime.sleep(1.5)
+                        module_time.sleep(1.5)
                         st.rerun()
                     except Exception as e:
                         st.error(f"Erro ao cadastrar produto: {str(e)}")
@@ -1058,7 +1058,7 @@ def modulo_vendas(db):
                         
                         # Limpa os itens da sessão
                         del st.session_state.itens_venda
-                        pytime.sleep(3)
+                        module_time.sleep(3)
                         st.rerun()
                         
                 except Exception as e:
@@ -1644,7 +1644,7 @@ def modulo_entregas(db):
                         )
                         horario_entrega = st.time_input(
                             "Horário*",
-                            value=time(14, 0)  # Horário padrão: 14:00
+                            value=datetime.time(14, 0)  # Horário padrão: 14:00
                         )
                     with col2:
                         tipo_entrega = st.radio(
@@ -1702,7 +1702,7 @@ def modulo_entregas(db):
                             
                             st.success("Entrega agendada com sucesso!")
                             st.balloons()
-                            pytime.sleep(2)
+                            module_time.sleep(2)
                             st.rerun()
 
 # =============================================
