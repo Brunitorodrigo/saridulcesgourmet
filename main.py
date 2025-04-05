@@ -13,7 +13,7 @@ from io import BytesIO
 # CONFIGURAÇÃO DO MONGODB ATLAS
 # =============================================
 
-MONGO_URI = 'mongodb+srv://brunorodrigo:123Putao@cluster0.lrr3cgd.mongodb.net/saridulces?retryWrites=true&w=majority'
+MONGO_URI = 'mongodb+srv://brunorodrigo:123Putao@cluster0.lrr3cgd.mongodb.net/saridulces?retryWrites=true&w=majority&directConnection=true'
 
 def get_database():
     try:
