@@ -10,7 +10,7 @@ import hashlib
 import base64
 from io import BytesIO
 import os
-
+import time
 # =============================================
 # CONFIGURAÇÃO DO MONGODB ATLAS
 # =============================================
