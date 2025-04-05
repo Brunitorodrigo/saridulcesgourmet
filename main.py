@@ -1418,7 +1418,7 @@ def modulo_vendas(db):
                         st.warning("Nenhum dado para exportar")
             except Exception as e:
                 st.error(f"Erro ao gerar relatório: {str(e)}")
-                # =============================================
+ # =============================================
 # MÓDULO DE ENTREGAS
 # =============================================
 
@@ -1430,13 +1430,13 @@ def modulo_entregas(db):
     clientes_col = db['clientes']
     entregas_col = db['entregas']
 
-    tab1, tab2 = st.tabs(["📅 Calendário de Entregas", "➕ Nova Entrega"])
+    tab1, tab2, tab3 = st.tabs(["📅 Agenda de Entregas", "➕ Nova Entrega", "📊 Relatório"])
 
     with tab1:
         st.subheader("Agenda de Entregas")
         
         # Filtros
-        col_f1, col_f2 = st.columns(2)
+        col_f1, col_f2, col_f3 = st.columns(3)
         with col_f1:
             data_inicio = st.date_input(
                 "Data inicial",
@@ -1449,36 +1449,50 @@ def modulo_entregas(db):
                 value=date.today() + timedelta(days=7),
                 key="ent_data_fim"
             )
+        with col_f3:
+            filtro_status = st.selectbox(
+                "Status",
+                ["Todas", "Agendada", "Em Rota", "Entregue", "Cancelada"],
+                index=0,
+                key="filtro_status_entrega"
+            )
         
-        # Busca entregas no período
-        entregas = list(entregas_col.find({
+        # Construir query de filtro
+        query = {
             "data_entrega": {
                 "$gte": datetime.combine(data_inicio, datetime.min.time()),
                 "$lte": datetime.combine(data_fim, datetime.max.time())
             }
-        }).sort("data_entrega", 1))
+        }
+        
+        if filtro_status != "Todas":
+            query["status"] = filtro_status.lower().replace(" ", "_")
+        
+        # Busca entregas no período
+        entregas = list(entregas_col.find(query).sort("data_entrega", 1))
         
         if not entregas:
-            st.info("Nenhuma entrega agendada para o período selecionado.")
+            st.info("Nenhuma entrega encontrada com os filtros selecionados.")
         else:
             # Prepara dados para exibição
             dados_entregas = []
             for entrega in entregas:
-                venda = vendas_col.find_one({"_id": ObjectId(entrega["venda_id"])})
-                cliente = clientes_col.find_one({"_id": ObjectId(venda["cliente_id"])}) if venda else None
-                
-                dados_entregas.append({
-                    "ID": str(entrega["_id"]),
-                    "Venda ID": str(entrega["venda_id"]),
-                    "Cliente": cliente["nome"] if cliente else "Cliente não encontrado",
-                    "Data Entrega": entrega["data_entrega"].strftime("%d/%m/%Y %H:%M"),
-                    "Tipo": entrega["tipo"].capitalize(),
-                    "Status": entrega["status"].capitalize(),
-                    "Custo": entrega.get("custo_entrega", 0),
-                    "Endereço": entrega.get("endereco_entrega", "Retirada na loja"),
-                    "Observações": entrega.get("observacoes", "-"),
-                    "Ações": "Manter"
-                })
+                try:
+                    venda = vendas_col.find_one({"_id": ObjectId(entrega["venda_id"])})
+                    cliente = clientes_col.find_one({"_id": ObjectId(venda["cliente_id"])}) if venda else None
+                    
+                    dados_entregas.append({
+                        "ID": str(entrega["_id"]),
+                        "Venda": f"#{str(entrega['venda_id'])[-6:]}",
+                        "Cliente": cliente["nome"] if cliente else "Cliente não encontrado",
+                        "Data Entrega": entrega["data_entrega"].strftime("%d/%m/%Y %H:%M"),
+                        "Status": entrega["status"].replace("_", " ").title(),
+                        "Valor": venda["valor_total"] if venda else 0,
+                        "Endereço": entrega.get("endereco_entrega", "Retirada na loja"),
+                        "Ações": "Manter"
+                    })
+                except:
+                    continue
 
             df_entregas = pd.DataFrame(dados_entregas)
             
@@ -1486,11 +1500,11 @@ def modulo_entregas(db):
                 df_entregas,
                 column_config={
                     "ID": st.column_config.Column(disabled=True),
-                    "Venda ID": st.column_config.Column(disabled=True),
-                    "Custo": st.column_config.NumberColumn(format="R$ %.2f"),
+                    "Venda": st.column_config.Column(disabled=True),
+                    "Valor": st.column_config.NumberColumn(format="R$ %.2f"),
                     "Ações": st.column_config.SelectboxColumn(
                         "Ações",
-                        options=["Manter", "Editar", "Cancelar", "Concluir"],
+                        options=["Manter", "Editar", "Em Rota", "Entregue", "Cancelar"],
                         required=True
                     )
                 },
@@ -1506,135 +1520,137 @@ def modulo_entregas(db):
                 # Ação de editar
                 if not edited_df[edited_df['Ações'] == "Editar"].empty:
                     for idx, row in edited_df[edited_df['Ações'] == "Editar"].iterrows():
-                        entrega_id = row['ID']
-                        st.session_state.editar_entrega = entrega_id
+                        st.session_state.editar_entrega_id = row['ID']
                         st.rerun()
                 
-                # Ação de cancelar
-                if not edited_df[edited_df['Ações'] == "Cancelar"].empty:
-                    if st.button("Confirmar Cancelamento", key="btn_cancelar_entregas"):
-                        for idx, row in edited_df[edited_df['Ações'] == "Cancelar"].iterrows():
-                            entregas_col.update_one(
-                                {"_id": ObjectId(row['ID'])},
-                                {"$set": {"status": "cancelada"}}
-                            )
-                        st.success("Entregas canceladas com sucesso!")
-                        st.rerun()
-                
-                # Ação de concluir
-                if not edited_df[edited_df['Ações'] == "Concluir"].empty:
-                    if st.button("Confirmar Conclusão", type="primary", key="btn_concluir_entregas"):
-                        for idx, row in edited_df[edited_df['Ações'] == "Concluir"].iterrows():
-                            entregas_col.update_one(
-                                {"_id": ObjectId(row['ID'])},
-                                {"$set": {"status": "concluída"}}
-                            )
-                        st.success("Entregas marcadas como concluídas!")
-                        st.rerun()
-        
-        # Edição de entrega específica
-        if 'editar_entrega' in st.session_state and st.session_state.editar_entrega:
-            entrega = entregas_col.find_one({"_id": ObjectId(st.session_state.editar_entrega)})
-            if entrega:
-                st.subheader("Editar Entrega")
-                
-                with st.form("form_editar_entrega"):
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        nova_data = st.date_input(
-                            "Nova Data de Entrega",
-                            value=entrega["data_entrega"].date(),
-                            min_value=date.today()
-                        )
-                        novo_horario = st.time_input(
-                            "Novo Horário",
-                            value=entrega["data_entrega"].time()
-                        )
-                    with col2:
-                        novo_status = st.selectbox(
-                            "Status",
-                            ["agendada", "em_transporte", "entregue", "cancelada"],
-                            index=["agendada", "em_transporte", "entregue", "cancelada"].index(entrega["status"])
-                        )
-                        novo_custo = st.number_input(
-                            "Custo da Entrega (R$)",
-                            min_value=0.0,
-                            value=float(entrega.get("custo_entrega", 0)),
-                            step=0.01,
-                            format="%.2f"
-                        )
-                    
-                    novas_obs = st.text_area(
-                        "Observações",
-                        value=entrega.get("observacoes", "")
+                # Ações de status
+                for acao in ["Em Rota", "Entregue", "Cancelar"]:
+                    if not edited_df[edited_df['Ações'] == acao].empty:
+                        if st.button(f"Confirmar '{acao}'", key=f"btn_{acao}"):
+                            for idx, row in edited_df[edited_df['Ações'] == acao].iterrows():
+                                novo_status = acao.lower().replace(" ", "_") if acao != "Cancelar" else "cancelada"
+                                entregas_col.update_one(
+                                    {"_id": ObjectId(row['ID'])},
+                                    {"$set": {"status": novo_status}}
+                                )
+                            st.success(f"Status atualizado para '{acao}'!")
+                            st.rerun()
+
+    # Edição de entrega
+    if 'editar_entrega_id' in st.session_state and st.session_state.editar_entrega_id:
+        entrega = entregas_col.find_one({"_id": ObjectId(st.session_state.editar_entrega_id)})
+        if entrega:
+            venda = vendas_col.find_one({"_id": ObjectId(entrega["venda_id"])})
+            cliente = clientes_col.find_one({"_id": ObjectId(venda["cliente_id"])}) if venda else None
+            
+            st.subheader("Editar Entrega")
+            st.write(f"**Venda:** #{str(entrega['venda_id'])[-6:]}")
+            st.write(f"**Cliente:** {cliente['nome'] if cliente else 'Não encontrado'}")
+            
+            with st.form("form_editar_entrega"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    nova_data = st.date_input(
+                        "Data de Entrega",
+                        value=entrega["data_entrega"].date(),
+                        min_value=date.today()
                     )
-                    
+                    novo_horario = st.time_input(
+                        "Horário",
+                        value=entrega["data_entrega"].time()
+                    )
+                with col2:
+                    novo_status = st.selectbox(
+                        "Status",
+                        ["agendada", "em_rota", "entregue", "cancelada"],
+                        index=["agendada", "em_rota", "entregue", "cancelada"].index(entrega["status"])
+                    )
+                    novo_custo = st.number_input(
+                        "Custo da Entrega (R$)",
+                        min_value=0.0,
+                        value=float(entrega.get("custo_entrega", 0)),
+                        step=0.01,
+                        format="%.2f"
+                    )
+                
+                observacoes = st.text_area(
+                    "Observações",
+                    value=entrega.get("observacoes", "")
+                )
+                
+                col_b1, col_b2 = st.columns(2)
+                with col_b1:
                     if st.form_submit_button("Salvar Alterações"):
                         data_hora_entrega = datetime.combine(nova_data, novo_horario)
                         
+                        atualizacao = {
+                            "data_entrega": data_hora_entrega,
+                            "status": novo_status,
+                            "custo_entrega": novo_custo,
+                            "observacoes": observacoes,
+                            "ultima_atualizacao": datetime.now()
+                        }
+                        
                         entregas_col.update_one(
-                            {"_id": ObjectId(st.session_state.editar_entrega)},
-                            {"$set": {
-                                "data_entrega": data_hora_entrega,
-                                "status": novo_status,
-                                "custo_entrega": novo_custo,
-                                "observacoes": novas_obs
-                            }}
+                            {"_id": ObjectId(st.session_state.editar_entrega_id)},
+                            {"$set": atualizacao}
                         )
                         
-                        # Atualiza custo na venda associada se necessário
-                        if 'venda_id' in entrega:
+                        # Atualiza custo na venda associada
+                        if venda:
                             vendas_col.update_one(
                                 {"_id": ObjectId(entrega["venda_id"])},
                                 {"$set": {"custo_entrega": novo_custo}}
                             )
                         
                         st.success("Entrega atualizada com sucesso!")
-                        del st.session_state.editar_entrega
+                        del st.session_state.editar_entrega_id
+                        module_time.sleep(1)
                         st.rerun()
-                    
-                    if st.button("Cancelar Edição"):
-                        del st.session_state.editar_entrega
+                
+                with col_b2:
+                    if st.button("Cancelar"):
+                        del st.session_state.editar_entrega_id
                         st.rerun()
 
     with tab2:
         st.subheader("Agendar Nova Entrega")
         
-        # Busca vendas sem entrega agendada
-        vendas_sem_entrega = list(vendas_col.aggregate([
-            {"$lookup": {
-                "from": "entregas",
-                "localField": "_id",
-                "foreignField": "venda_id",
-                "as": "entregas"
-            }},
+        # Busca vendas elegíveis para entrega
+        vendas_para_entrega = list(vendas_col.aggregate([
             {"$match": {
-                "entregas": {"$size": 0},
-                "status": "concluída"
+                "status": "concluída",
+                "tipo_entrega": "entrega_ao_cliente",
+                "_id": {"$nin": [ObjectId(e["venda_id"]) for e in entregas_col.find({}, {"venda_id": 1})]}
             }},
             {"$sort": {"data_venda": -1}},
             {"$limit": 50}
         ]))
         
-        if not vendas_sem_entrega:
+        if not vendas_para_entrega:
             st.info("Nenhuma venda disponível para agendamento de entrega.")
+            st.write("Verifique se existem vendas concluídas com tipo 'Entrega ao Cliente' que ainda não foram agendadas.")
         else:
             # Seleciona venda
             venda_selecionada = st.selectbox(
                 "Selecione a Venda",
-                options=[str(v["_id"]) for v in vendas_sem_entrega],
+                options=[str(v["_id"]) for v in vendas_para_entrega],
                 format_func=lambda x: next(
-                    f"Venda #{str(v['_id'])[-4:]} - {clientes_col.find_one({'_id': ObjectId(v['cliente_id'])})['nome']} - R$ {v['valor_total']:.2f}"
-                    for v in vendas_sem_entrega
+                    f"Venda #{str(v['_id'])[-6:]} - {clientes_col.find_one({'_id': ObjectId(v['cliente_id'])})['nome']} - R$ {v['valor_total']:.2f}"
+                    for v in vendas_para_entrega
                     if str(v["_id"]) == x
-                )
+                ),
+                key="select_venda_entrega"
             )
             
             if venda_selecionada:
-                venda = next(v for v in vendas_sem_entrega if str(v["_id"]) == venda_selecionada)
+                venda = next(v for v in vendas_para_entrega if str(v["_id"]) == venda_selecionada)
                 cliente = clientes_col.find_one({"_id": ObjectId(venda["cliente_id"])})
                 
                 with st.form("form_nova_entrega", clear_on_submit=True):
+                    st.write(f"**Cliente:** {cliente['nome']}")
+                    st.write(f"**Valor da Venda:** R$ {venda['valor_total']:.2f}")
+                    
                     col1, col2 = st.columns(2)
                     with col1:
                         data_entrega = st.date_input(
@@ -1642,53 +1658,52 @@ def modulo_entregas(db):
                             min_value=date.today(),
                             value=date.today() + timedelta(days=1)
                         )
+                    with col2:
                         horario_entrega = st.time_input(
                             "Horário*",
-                            value=datetime.time(14, 0)  # Horário padrão: 14:00
+                            value=time(14, 0)  # Horário padrão: 14:00
                         )
-                    with col2:
-                        tipo_entrega = st.radio(
-                            "Tipo de Entrega*",
-                            ["Retirada na Loja", "Entrega ao Cliente"],
-                            horizontal=True
-                        )
-                        
+                    
+                    # Mostra endereço do cliente
+                    st.write("**Endereço para Entrega:**")
+                    if cliente and "endereco" in cliente and cliente["endereco"]:
+                        st.write(cliente["endereco"])
+                        endereco_entrega = cliente["endereco"]
+                    else:
+                        st.warning("Cliente não possui endereço cadastrado!")
+                        endereco_entrega = st.text_input("Informe o endereço para entrega*")
+                    
+                    col_c1, col_c2 = st.columns(2)
+                    with col_c1:
                         custo_entrega = st.number_input(
                             "Custo da Entrega (R$)*",
                             min_value=0.0,
-                            value=0.0 if tipo_entrega == "Retirada na Loja" else 15.0,
+                            value=15.0,
                             step=0.01,
-                            format="%.2f",
-                            disabled=tipo_entrega == "Retirada na Loja"
+                            format="%.2f"
                         )
-                    
-                    # Mostra endereço se for entrega
-                    endereco_entrega = None
-                    if tipo_entrega == "Entrega ao Cliente":
-                        st.write("**Endereço para Entrega:**")
-                        if cliente and "endereco" in cliente and cliente["endereco"]:
-                            st.write(cliente["endereco"])
-                            endereco_entrega = cliente["endereco"]
-                        else:
-                            st.warning("Cliente não possui endereço cadastrado!")
-                            endereco_entrega = st.text_input("Informe o endereço para entrega*")
+                    with col_c2:
+                        responsavel = st.text_input(
+                            "Responsável pela Entrega",
+                            value=st.session_state.usuario_atual["nome"]
+                        )
                     
                     observacoes = st.text_area("Observações (opcional)")
                     
                     if st.form_submit_button("Agendar Entrega"):
-                        if tipo_entrega == "Entrega ao Cliente" and not endereco_entrega:
+                        if not endereco_entrega:
                             st.error("Informe o endereço para entrega!")
                         else:
                             nova_entrega = {
                                 "venda_id": venda_selecionada,
                                 "data_entrega": datetime.combine(data_entrega, horario_entrega),
-                                "tipo": tipo_entrega.lower().replace(" ", "_"),
                                 "status": "agendada",
+                                "endereco_entrega": endereco_entrega,
                                 "custo_entrega": float(custo_entrega),
-                                "endereco_entrega": endereco_entrega if tipo_entrega == "Entrega ao Cliente" else None,
+                                "responsavel": responsavel,
                                 "observacoes": observacoes if observacoes else None,
                                 "data_cadastro": datetime.now(),
-                                "responsavel": st.session_state.usuario_atual["nome"]
+                                "ultima_atualizacao": datetime.now()
                             }
                             
                             # Insere a entrega
@@ -1704,6 +1719,98 @@ def modulo_entregas(db):
                             st.balloons()
                             module_time.sleep(2)
                             st.rerun()
+
+    with tab3:
+        st.subheader("Relatório de Entregas")
+        
+        col_r1, col_r2 = st.columns(2)
+        with col_r1:
+            data_inicio_rel = st.date_input(
+                "Data inicial",
+                value=date.today() - timedelta(days=30),
+                key="rel_ent_data_inicio"
+            )
+        with col_r2:
+            data_fim_rel = st.date_input(
+                "Data final",
+                value=date.today(),
+                key="rel_ent_data_fim"
+            )
+        
+        if st.button("Gerar Relatório", key="btn_rel_entregas"):
+            try:
+                with st.spinner("Processando relatório..."):
+                    # Filtro de período
+                    filtro = {
+                        "data_entrega": {
+                            "$gte": datetime.combine(data_inicio_rel, datetime.min.time()),
+                            "$lte": datetime.combine(data_fim_rel, datetime.max.time())
+                        }
+                    }
+                    
+                    # Busca entregas no período
+                    entregas = list(entregas_col.find(filtro).sort("data_entrega", 1))
+                    
+                    if not entregas:
+                        st.info("Nenhuma entrega encontrada no período selecionado.")
+                    else:
+                        # Processa dados para o relatório
+                        dados = []
+                        for entrega in entregas:
+                            try:
+                                venda = vendas_col.find_one({"_id": ObjectId(entrega["venda_id"])})
+                                cliente = clientes_col.find_one({"_id": ObjectId(venda["cliente_id"])}) if venda else None
+                                
+                                dados.append({
+                                    "Data": entrega["data_entrega"].strftime("%d/%m/%Y %H:%M"),
+                                    "Venda": f"#{str(entrega['venda_id'])[-6:]}",
+                                    "Cliente": cliente["nome"] if cliente else "Não encontrado",
+                                    "Status": entrega["status"].replace("_", " ").title(),
+                                    "Custo": entrega.get("custo_entrega", 0),
+                                    "Responsável": entrega.get("responsavel", "Não informado")
+                                })
+                            except:
+                                continue
+                        
+                        df_relatorio = pd.DataFrame(dados)
+                        
+                        # Métricas rápidas
+                        col_m1, col_m2, col_m3 = st.columns(3)
+                        with col_m1:
+                            st.metric("Total de Entregas", len(entregas))
+                        with col_m2:
+                            custo_total = df_relatorio["Custo"].sum()
+                            st.metric("Custo Total", f"R$ {custo_total:,.2f}")
+                        with col_m3:
+                            entregues = len([e for e in entregas if e["status"] == "entregue"])
+                            st.metric("Taxa de Entrega", f"{(entregues/len(entregas)*100):.1f}%")
+                        
+                        # Agrupamento por status
+                        st.subheader("Distribuição por Status")
+                        status_counts = df_relatorio["Status"].value_counts()
+                        st.bar_chart(status_counts)
+                        
+                        # Tabela detalhada
+                        st.subheader("Detalhes das Entregas")
+                        st.dataframe(
+                            df_relatorio,
+                            column_config={
+                                "Custo": st.column_config.NumberColumn(format="R$ %.2f")
+                            },
+                            hide_index=True,
+                            use_container_width=True
+                        )
+                        
+                        # Exportar para Excel
+                        excel_data = generate_excel(df_relatorio)
+                        st.download_button(
+                            label="📥 Exportar para Excel",
+                            data=excel_data,
+                            file_name=f"relatorio_entregas_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+            except Exception as e:
+                st.error(f"Erro ao gerar relatório: {str(e)}")
 
 # =============================================
 # MÓDULO DE RELATÓRIOS
