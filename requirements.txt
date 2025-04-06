@@ -1,5 +1,5 @@
-streamlit==1.32.0
-pymongo==4.6.0
-pandas==2.1.4
-certifi==2023.11.17
-python-dateutil==2.8.2
+streamlit==1.28.0
+pymongo==4.5.0
+python-dotenv==1.0.0
+certifi==2023.7.22
+pandas==2.1.0

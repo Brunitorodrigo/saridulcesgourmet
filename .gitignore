@@ -1,0 +1,13 @@
+# Arquivos sensíveis
+.env
+.streamlit/secrets.toml
+*.env.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Streamlit
+.streamlit/credentials.toml

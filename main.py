@@ -12,36 +12,66 @@ import base64
 from io import BytesIO
 import os
 import time
+from dotenv import load_dotenv
+load_dotenv()
 # =============================================
 # CONFIGURAÇÃO DO MONGODB ATLAS
 # =============================================
 
-MONGO_URI = 'mongodb+srv://brunorodrigo:123Putao@cluster0.lrr3cgd.mongodb.net/saridulces?retryWrites=true&w=majority&readPreference=primaryPreferred'
+MONGO_URI = os.getenv('MONGO_URI')
 
 def get_database(max_retries=3):
+    """Função segura para obter conexão com o MongoDB"""
+    
+    # =============================================
+    # VERIFICAÇÕES DE SEGURANÇA (adicionar esta parte)
+    # =============================================
+    if not MONGO_URI:
+        raise ValueError("❌ String de conexão não configurada. Verifique seu arquivo .env ou variáveis de ambiente")
+    
+    if "mongodb+srv://" not in MONGO_URI:
+        raise ValueError("❌ String de conexão inválida. Deve usar o formato mongodb+srv://")
+    
+    if any(cred in MONGO_URI for cred in ["username:password", "admin:admin", "root:root", "//:@"]):
+        raise ValueError("❌ Credenciais padrão ou vazias detectadas na string de conexão")
+    
+    if len(MONGO_URI.split('@')[0].split(':')[1]) < 8:
+        raise ValueError("❌ Senha muito curta (mínimo 8 caracteres)")
+    
+    # =============================================
+    # CONEXÃO COM TRATAMENTO DE ERROS (mantenha o existente)
+    # =============================================
     for attempt in range(max_retries):
         try:
             client = MongoClient(
                 MONGO_URI,
-                tlsCAFile=certifi.where(),
+                tlsCAFile=certifi.where(),  # Sempre use SSL
                 connectTimeoutMS=15000,
                 socketTimeoutMS=30000,
                 serverSelectionTimeoutMS=15000,
-                heartbeatFrequencyMS=10000,
                 appname="SariDulcesApp",
-                retryReads=True,
                 retryWrites=True,
-                readPreference='primaryPreferred'
+                retryReads=True,
+                readPreference='primaryPreferred',
+                maxPoolSize=50,  # Limite de conexões
+                socketKeepAlive=True
             )
             
-            # Teste de conexão que força a descoberta do primário
-            client.admin.command('ismaster')
+            # Teste de conexão seguro
+            client.admin.command('ping')
+            db = client.get_database('saridulces')
             
-            return client.saridulces
+            # Verificação adicional de permissões
+            if db.command('connectionStatus').get('authInfo', {}).get('authenticatedUsers', []) == []:
+                raise ValueError("❌ Falha na autenticação com o banco de dados")
             
-        except (AutoReconnect, NotPrimaryError) as e:
+            return db
+            
+        except Exception as e:
             if attempt == max_retries - 1:
-                raise Exception(f"Não foi possível encontrar o nó primário após {max_retries} tentativas")
+                st.error(f"🔒 Falha crítica de conexão: {str(e)}")
+                st.error("⚠️ Verifique: 1) Sua conexão com a internet 2) Credenciais no .env 3) Acesso IP no MongoDB Atlas")
+                st.stop()
             time.sleep(2 ** attempt)  # Backoff exponencial
             
         except OperationFailure as e:
@@ -2396,6 +2426,9 @@ def modulo_relatorios(db):
 # =============================================
 
 def main():
+    if not MONGO_URI or "mongodb+srv://" not in MONGO_URI:
+        st.error("⚠️ Configuração de banco de dados inválida. Contate o administrador.")
+        st.stop()
     st.set_page_config(
         page_title="Sari Dulces iGEST",
         page_icon="🛒",
