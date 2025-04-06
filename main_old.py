@@ -1,7 +1,8 @@
+import delivery_module # Adicione esta linha
 import streamlit as st
 import pandas as pd
-from datetime import datetime, date, timedelta
-import time as pytime
+from datetime import datetime, date, timedelta, time
+import time as module_time
 from pymongo import MongoClient
 from pymongo.errors import AutoReconnect, ConnectionFailure, ServerSelectionTimeoutError
 import certifi
@@ -11,15 +12,13 @@ import base64
 from io import BytesIO
 import os
 import time
-from pymongo.errors import OperationFailure
-from datetime import time
-import time as module_time
+from dotenv import load_dotenv
+load_dotenv()
 # =============================================
 # CONFIGURAÇÃO DO MONGODB ATLAS
 # =============================================
 
-
-MONGO_URI = st.secrets["MONGO_URI"]
+MONGO_URI = os.getenv('MONGO_URI')
 
 def get_database(max_retries=3):
     """Função segura para obter conexão com o MongoDB"""
@@ -55,7 +54,7 @@ def get_database(max_retries=3):
                 retryReads=True,
                 readPreference='primaryPreferred',
                 maxPoolSize=50,  # Limite de conexões
-               # socketKeepAlive=True
+                socketKeepAlive=True
             )
             
             # Teste de conexão seguro
@@ -125,7 +124,7 @@ def pagina_login(db):
                 )
                 
                 st.success(f"Bem-vindo, {usuario['nome']}!")
-                pytime.sleep(1)
+                module_time.sleep(1)
                 st.rerun()
             else:
                 st.session_state.tentativas_login += 1
@@ -181,7 +180,7 @@ def alterar_senha(db):
             
             st.success("Senha alterada com sucesso!")
             st.balloons()
-            pytime.sleep(2)
+            module_time.sleep(2)
             st.session_state.pagina_atual = "menu"
             st.rerun()
     
@@ -299,7 +298,7 @@ def modulo_usuarios(db):
                             db.usuarios.insert_one(novo_usuario)
                             st.success("Usuário cadastrado com sucesso!")
                             st.balloons()
-                            pytime.sleep(1.5)
+                            module_time.sleep(1.5)
                             st.rerun()
                         except Exception as e:
                             st.error(f"Erro ao cadastrar usuário: {str(e)}")
@@ -389,7 +388,7 @@ def modulo_clientes(db):
                         clientes_col.insert_one(novo_cliente)
                         st.success("Cliente cadastrado com sucesso!")
                         st.balloons()
-                        pytime.sleep(1.5)
+                        module_time.sleep(1.5)
                         st.rerun()
                     except Exception as e:
                         st.error(f"Erro ao cadastrar cliente: {str(e)}")
@@ -666,7 +665,7 @@ def modulo_produtos(db):
                         produtos_col.insert_one(novo_produto)
                         st.success("Produto cadastrado com sucesso!")
                         st.balloons()
-                        pytime.sleep(1.5)
+                        module_time.sleep(1.5)
                         st.rerun()
                     except Exception as e:
                         st.error(f"Erro ao cadastrar produto: {str(e)}")
@@ -773,10 +772,6 @@ def modulo_produtos(db):
                             unsafe_allow_html=True
                         )
 
-# =============================================
-# MÓDULO DE VENDAS
-# =============================================
-
 def modulo_vendas(db):
     verificar_autenticacao(db)
     st.title("💰 Gestão de Vendas")
@@ -809,6 +804,7 @@ def modulo_vendas(db):
                 format_func=lambda x: next(c["nome"] for c in clientes_ativos if str(c["_id"]) == x),
                 key="select_cliente_nova_venda"
             )
+            cliente = clientes_col.find_one({"_id": ObjectId(cliente_id)})
         with col_c2:
             if st.button("➕ Novo Cliente", use_container_width=True):
                 st.session_state.menu = "Clientes"
@@ -926,7 +922,36 @@ def modulo_vendas(db):
                 st.rerun()
             
             # Calcula totais
-            total_venda = sum(item['subtotal'] for item in st.session_state.itens_venda)
+            total_itens = sum(item['subtotal'] for item in st.session_state.itens_venda)
+            
+            # Seção de Entrega
+            with st.expander("🚚 Opções de Entrega", expanded=True):
+                tipo_entrega = st.radio(
+                    "Tipo de Entrega*",
+                    ["Retirada na Loja", "Entrega ao Cliente"],
+                    index=0,
+                    horizontal=True,
+                    key="tipo_entrega_venda"
+                )
+                
+                custo_entrega = st.number_input(
+                    "Custo da Entrega (R$)",
+                    min_value=0.0,
+                    value=0.0,
+                    step=0.01,
+                    format="%.2f",
+                    disabled=(tipo_entrega == "Retirada na Loja"),
+                    key="custo_entrega_venda"
+                )
+                
+                if tipo_entrega == "Entrega ao Cliente":
+                    st.write("**Endereço para Entrega:**")
+                    if cliente and "endereco" in cliente and cliente["endereco"]:
+                        st.write(cliente["endereco"])
+                    else:
+                        st.warning("Cliente não possui endereço cadastrado!")
+            
+            total_venda = total_itens + float(custo_entrega)
             lucro_estimado = sum(
                 (item['preco_unitario'] - item['custo_unitario']) * item['quantidade']
                 for item in st.session_state.itens_venda
@@ -947,7 +972,8 @@ def modulo_vendas(db):
             metodo_pagamento = st.radio(
                 "Método de Pagamento*",
                 ["Dinheiro", "Cartão de Crédito", "Cartão de Débito", "PIX", "Transferência Bancária"],
-                horizontal=True
+                horizontal=True,
+                key="metodo_pagamento_venda"
             )
             
             # Configurações específicas por método de pagamento
@@ -959,7 +985,8 @@ def modulo_vendas(db):
                     min_value=0.0,
                     value=float(total_venda),
                     step=1.0,
-                    format="%.2f"
+                    format="%.2f",
+                    key="valor_recebido_venda"
                 )
                 troco = valor_recebido - total_venda
                 if troco >= 0:
@@ -973,7 +1000,8 @@ def modulo_vendas(db):
                 parcelas = st.selectbox(
                     "Número de Parcelas*",
                     [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-                    index=0
+                    index=0,
+                    key="parcelas_venda"
                 )
                 valor_parcela = total_venda / parcelas
                 st.write(f"💸 {parcelas}x de R$ {valor_parcela:.2f}")
@@ -991,7 +1019,7 @@ def modulo_vendas(db):
                     detalhes_pagamento["comprovante"] = "Enviado"
             
             # Finalização da venda
-            if st.button("✅ Finalizar Venda", type="primary", use_container_width=True):
+            if st.button("✅ Finalizar Venda", type="primary", use_container_width=True, key="btn_finalizar_venda"):
                 try:
                     with st.spinner("Processando venda..."):
                         # Cria a venda principal
@@ -1003,7 +1031,9 @@ def modulo_vendas(db):
                             "status": "concluída",
                             "itens_count": len(st.session_state.itens_venda),
                             "metodo_pagamento": metodo_pagamento.lower(),
-                            "detalhes_pagamento": detalhes_pagamento
+                            "detalhes_pagamento": detalhes_pagamento,
+                            "custo_entrega": float(custo_entrega),
+                            "tipo_entrega": tipo_entrega.lower().replace(" ", "_")
                         }
                         
                         # Insere a venda e obtém o ID
@@ -1047,7 +1077,6 @@ def modulo_vendas(db):
                         
                         # Exibe resumo da venda
                         with st.expander("📝 Resumo da Venda", expanded=True):
-                            cliente = clientes_col.find_one({"_id": ObjectId(cliente_id)})
                             st.write(f"**Cliente:** {cliente['nome']}")
                             st.write(f"**Data/Hora:** {datetime.now().strftime('%d/%m/%Y %H:%M')}")
                             st.write(f"**Total:** R$ {total_venda:,.2f}")
@@ -1064,7 +1093,7 @@ def modulo_vendas(db):
                         
                         # Limpa os itens da sessão
                         del st.session_state.itens_venda
-                        pytime.sleep(3)
+                        module_time.sleep(3)
                         st.rerun()
                         
                 except Exception as e:
@@ -1093,7 +1122,8 @@ def modulo_vendas(db):
                 filtro_pagamento = st.selectbox(
                     "Forma de Pagamento",
                     ["Todas", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "PIX", "Transferência Bancária"],
-                    index=0
+                    index=0,
+                    key="filtro_pagamento_historico"
                 )
         
         # Aplica filtros
@@ -1156,7 +1186,7 @@ def modulo_vendas(db):
                 if not edited_df[edited_df['Ações'] == "Cancelar"].empty:
                     st.warning("⚠️ Atenção: Esta ação não pode ser desfeita!")
                     
-                    if st.button("Confirmar Cancelamento", type="primary"):
+                    if st.button("Confirmar Cancelamento", type="primary", key="btn_cancelar_venda"):
                         with st.spinner("Processando cancelamento..."):
                             try:
                                 for idx, row in edited_df[edited_df['Ações'] == "Cancelar"].iterrows():
@@ -1424,7 +1454,7 @@ def modulo_vendas(db):
                         st.warning("Nenhum dado para exportar")
             except Exception as e:
                 st.error(f"Erro ao gerar relatório: {str(e)}")
-# =============================================
+ # =============================================
 # MÓDULO DE ENTREGAS
 # =============================================
 
@@ -2396,6 +2426,9 @@ def modulo_relatorios(db):
 # =============================================
 
 def main():
+    if not MONGO_URI or "mongodb+srv://" not in MONGO_URI:
+        st.error("⚠️ Configuração de banco de dados inválida. Contate o administrador.")
+        st.stop()
     st.set_page_config(
         page_title="Sari Dulces iGEST",
         page_icon="🛒",
@@ -2424,7 +2457,7 @@ def main():
         st.markdown(f"**Nível:** {st.session_state.usuario_atual['nivel_acesso'].capitalize()}")
         st.markdown("---")
         
-        opcoes_menu = ["👥 Clientes", "📦 Produtos", "💰 Vendas", "🚚 Entregas", "📊 Relatórios"]
+        opcoes_menu = ["👥 Clientes", "📦 Produtos", "💰 Vendas","🚚 Entregas", "📊 Relatórios"]
         
         # Adiciona gestão de usuários apenas para administradores
         if st.session_state.usuario_atual['nivel_acesso'] in ['admin', 'gerente']:
@@ -2460,8 +2493,8 @@ def main():
         modulo_produtos(db)
     elif menu == "💰 Vendas":
         modulo_vendas(db)
-    elif menu == "🚚 Entregas":
-        modulo_entregas(db)
+    elif menu == "🚚 Entregas": # Adicione este bloco
+        modulo_entregas(db)   # Chama a nova função que criaremos
     elif menu == "📊 Relatórios":
         modulo_relatorios(db)
     elif menu == "👨‍💼 Usuários":
