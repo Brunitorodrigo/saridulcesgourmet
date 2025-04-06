@@ -1087,54 +1087,101 @@ def modulo_vendas(db):
     # [Restante do código das outras abas (Histórico e Relatórios) permanece igual...]
 
     with tab4:
-        st.subheader("Gestão de Entregas")
-        
         # Verifica se há uma venda recente na sessão para agilizar o agendamento
-        if 'ultima_venda' in st.session_state and st.session_state.ultima_venda.get('tipo_entrega', '') == 'entrega_ao_cliente':
-            venda_para_entrega = st.session_state.ultima_venda
-            st.success(f"Venda #{str(venda_para_entrega['_id'])[-6:]} pronta para agendamento de entrega!")
+    if 'ultima_venda' in st.session_state and st.session_state.ultima_venda.get('tipo_entrega', '') == 'entrega_ao_cliente':
+        venda_para_entrega = st.session_state.ultima_venda
+        st.success(f"Venda #{str(venda_para_entrega['_id'])[-6:]} pronta para agendamento de entrega!")
+        
+        with st.form("form_agendar_entrega_rapida"):
+            col1, col2 = st.columns(2)
+            with col1:
+                data_entrega = st.date_input(
+                    "Data de Entrega*",
+                    min_value=date.today(),
+                    value=date.today() + timedelta(days=1))
+            with col2:
+                horario_entrega = st.time_input(
+                    "Horário*",
+                    value=time(14, 0))
             
-            with st.form("form_agendar_entrega_rapida"):
+            custo_entrega = st.number_input(
+                "Custo da Entrega (R$)*",
+                min_value=0.0,
+                value=15.0,
+                step=0.01,
+                format="%.2f")
+            
+            if st.form_submit_button("Agendar Entrega"):
+                # Cria a entrega
+                nova_entrega = {
+                    "venda_id": str(venda_para_entrega['_id']),
+                    "data_entrega": datetime.combine(data_entrega, horario_entrega),
+                    "status": "agendada",
+                    "custo_entrega": float(custo_entrega),
+                    "responsavel": st.session_state.usuario_atual['nome'],
+                    "data_cadastro": datetime.now()
+                }
+                
+                entregas_col.insert_one(nova_entrega)
+                
+                # Atualiza a venda com o custo
+                vendas_col.update_one(
+                    {"_id": venda_para_entrega['_id']},
+                    {"$set": {"custo_entrega": float(custo_entrega)}}
+                )
+                
+                st.success("Entrega agendada com sucesso!")
+                del st.session_state.ultima_venda
+                st.rerun()
+    
+    # Lista de entregas pendentes
+    st.subheader("Entregas Pendentes")
+    
+    entregas_pendentes = list(entregas_col.find({
+        "status": {"$in": ["agendada", "em_rota"]}
+    }).sort("data_entrega", 1))
+    
+    if not entregas_pendentes:
+        st.info("Nenhuma entrega pendente no momento.")
+    else:
+        for entrega in entregas_pendentes:
+            venda = vendas_col.find_one({"_id": ObjectId(entrega['venda_id'])}
+            cliente = clientes_col.find_one({"_id": ObjectId(venda['cliente_id'])} if venda else None
+            
+            # Corrigido: indentação correta do expander
+            with st.expander(f"Entrega #{str(entrega['_id'])[-6:]} - {entrega['data_entrega'].strftime('%d/%m/%Y %H:%M')}"):
                 col1, col2 = st.columns(2)
                 with col1:
-                    data_entrega = st.date_input(
-                        "Data de Entrega*",
-                        min_value=date.today(),
-                        value=date.today() + timedelta(days=1))
+                    st.write(f"**Venda:** #{str(entrega['venda_id'])[-6:]}")
+                    st.write(f"**Cliente:** {cliente['nome'] if cliente else 'Não encontrado'}")
+                    st.write(f"**Status:** {entrega['status'].replace('_', ' ').title()}")
                 with col2:
-                    horario_entrega = st.time_input(
-                        "Horário*",
-                        value=time(14, 0))
+                    st.write(f"**Valor da Venda:** R$ {venda['valor_total']:.2f}" if venda else "")
+                    st.write(f"**Custo de Entrega:** R$ {entrega.get('custo_entrega', 0):.2f}")
                 
-                custo_entrega = st.number_input(
-                    "Custo da Entrega (R$)*",
-                    min_value=0.0,
-                    value=15.0,
-                    step=0.01,
-                    format="%.2f")
-                
-                if st.form_submit_button("Agendar Entrega"):
-                    # Cria a entrega
-                    nova_entrega = {
-                        "venda_id": str(venda_para_entrega['_id']),
-                        "data_entrega": datetime.combine(data_entrega, horario_entrega),
-                        "status": "agendada",
-                        "custo_entrega": float(custo_entrega),
-                        "responsavel": st.session_state.usuario_atual['nome'],
-                        "data_cadastro": datetime.now()
-                    }
-                    
-                    entregas_col.insert_one(nova_entrega)
-                    
-                    # Atualiza a venda com o custo
-                    vendas_col.update_one(
-                        {"_id": venda_para_entrega['_id']},
-                        {"$set": {"custo_entrega": float(custo_entrega)}}
-                    )
-                    
-                    st.success("Entrega agendada com sucesso!")
-                    del st.session_state.ultima_venda
-                    st.rerun()
+                # Ações para a entrega
+                col_btn1, col_btn2, col_btn3 = st.columns(3)
+                with col_btn1:
+                    if st.button(f"Marcar como Em Rota", key=f"em_rota_{entrega['_id']}"):
+                        entregas_col.update_one(
+                            {"_id": entrega['_id']},
+                            {"$set": {"status": "em_rota"}}
+                        )
+                        st.rerun()
+                with col_btn2:
+                    if st.button(f"Marcar como Entregue", key=f"entregue_{entrega['_id']}"):
+                        entregas_col.update_one(
+                            {"_id": entrega['_id']},
+                            {"$set": {"status": "entregue"}}
+                        )
+                        st.rerun()
+                with col_btn3:
+                    if st.button(f"Cancelar Entrega", key=f"cancelar_{entrega['_id']}"):
+                        entregas_col.update_one(
+                            {"_id": entrega['_id']},
+                            {"$set": {"status": "cancelada"}}
+                        )
+                        st.rerun()
         
         # Lista de entregas pendentes
         st.subheader("Entregas Pendentes")
